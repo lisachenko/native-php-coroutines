@@ -35,19 +35,34 @@ throws `NotShareableValueException`, and the exception's job is to **name the re
 `src/Parallel/Protocol/Tag.php` is not an implementation detail; it *is* the set of things that may
 cross a boundary. Anything not in it throws.
 
-| Tag                | Payload              | Cost                                         |
-|--------------------|----------------------|----------------------------------------------|
-| NIL / TRUE / FALSE | none                 | zero — the tag is the value                  |
-| INT / FLOAT        | the value, inline    | zero                                         |
-| STR                | arena `zend_string*` | one structural memcpy into the arena at send |
-| OBJ                | arena `zend_object*` | zero-copy: the address is the value          |
-| ARR                | arena `SharedArray*` | zero-copy                                    |
-| CLOSE              | none                 | ring / protocol control                      |
+| Tag                | Payload                 | Cost                                         |
+|--------------------|-------------------------|----------------------------------------------|
+| NIL / TRUE / FALSE | none                    | zero — the tag is the value                  |
+| INT / FLOAT        | the value, inline       | zero                                         |
+| STR                | arena `zend_string*`    | one structural memcpy into the arena at send |
+| OBJ                | arena `zend_object*`    | zero-copy: the address is the value          |
+| ARR                | arena `SharedArray*`    | zero-copy                                    |
+| CLOSE              | none                    | ring / protocol control                      |
+| CLOSURE            | arena provenance record | zero-copy; pre-fork registrations only       |
+
+**The tag numbers are the substrate's.** `Tag` and `Lisachenko\SharedData\Ipc\ValueTag` are one
+table with two spellings — `NIL = 0 … CLOSE = 8`, `CLOSURE = 9` — and the substrate states that tag
+numbers are this runtime's wire contract and are never renumbered. Compare them **numerically**, not
+by name: `tests/Functional/testTheValueContractMatchesTheSubstrateNumerically.phpt` does, because a
+drifted number does not fail, it reinterprets every record in flight.
 
 **Sockets carry signals and event records, never value bytes.** A control frame is an opcode, a tag
 and an address or slot id — fixed size, no user data beyond a scalar, never a graph. If a change
 starts wanting to put "just a small payload" on the socket, the design has gone wrong: put the value
 in the arena and send its address.
+
+**There is exactly one record shape in this package, and it is the substrate's.** `ControlRecord` is
+16 bytes — `uint8 opcode | uint8 tag | uint16 pad | uint32 id | uint64 address` — byte for byte the
+substrate's `Ipc\WakeEvent`, which is what its channels, result slots and wake registry write onto
+their inherited sockets. The parent ↔ worker control socket uses the same shape, so there are not two
+decoders and no way to read one socket with the other's reader. `WAKE`, `RESULT`, `PANIC` and `CLOSE`
+carry the same opcode byte as `Ipc\WakeOpcode`; `SPAWN` and `SHUTDOWN` are ours alone and sit at 16
+and 17, clear of anything the substrate may append.
 
 A plain `zend_array` is deliberately absent. The engine grows a HashTable's storage through
 `pemalloc` into process-local heap with no hook to redirect it, and — this is the sharpened version
@@ -142,6 +157,63 @@ The mechanism was selected by experiment, and the negative result is the load-be
   z-engine is a hard dependency. Say it that way; the opposite claim ("no FFI needed") has already
   been wrong here once.
 
+## The parallel layer: what it composes, and in which order
+
+`Runtime` builds the shared state in its **constructor** and forks in `run()`, which is what makes
+the ordering above enforceable rather than aspirational:
+
+1. arena, object store, wake registry, result slots, closure register — `new Runtime(workers: N)`;
+2. shared roots and shareable closures — `declareShared()`, `registerSharedClosure()`,
+   `publishTask()`, between construction and `run()`;
+3. `SharedArena::sealBeforeFork()` and the fork — the first thing `run()` does;
+4. fibers, in each process for itself.
+
+Declaring a root or registering a closure after step 3 is **refused with a message saying why**, not
+deferred: neither would reach a process that already exists.
+
+- **Classes whose instances travel must be loaded before the fork.** A shared clone carries one
+  `zend_class_entry` for the whole family. `declareShared()` and `persist()` force the class; a class
+  first autoloaded inside a worker is fine there and meaningless to its siblings.
+- **A wakeup is a hint, never a delivery.** The substrate's wake sockets are level-triggered, so the
+  poller **drains the pipe first** and re-checks shared state second. Draining after re-checking, or
+  not at all, leaves the descriptor readable forever and spins the poller — a failure that looks like
+  a busy runtime, which is why
+  `tests/Functional/testTheWakePipeIsDrainedSoThePollerDoesNotSpin.phpt` asserts a *wakeup count* and
+  not just that the values arrived.
+- **The substrate's blocking helpers are spin loops and this runtime never calls them.** Parking a
+  Fiber is the consumer's job, and it belongs on the poller. Because we are therefore not in the
+  substrate's waiter tables, a state change made through this runtime is announced by a **family
+  broadcast** — one fixed-size event per attached process, carrying an opcode, a tag and an address,
+  never a value.
+- **Preemption crosses the fork in two seams, and collapsing them is the trap.**
+  `ProcessWorker::fork($id, $tasks, $afterFork, $afterScheduler)`: `$afterFork` runs before any
+  scheduler exists and re-arms the process-global `ItimerClock`; `$afterScheduler` runs inside
+  `WorkerChild::main()` once the child's own scheduler exists and builds a `Preemptor` **against that
+  scheduler**. Re-arming the inherited parent `Preemptor` instead arms the timer correctly and leaves
+  `shouldPreempt()` asking a scheduler that never runs anything, so the worker is never preempted and
+  nothing reports it. A test that only asserts "the timer is armed" passes under that wiring; the one
+  that counts is `testAWorkerInAPreemptivePoolIsActuallyPreempted.phpt`, which measures a ticker
+  running *inside the worker* while a call-free loop is still going.
+- **A result that can never arrive must become a throw.** A worker killed while holding an arena lock
+  hands that lock on as `EOWNERDEAD`; recovering it is the substrate's job, surfacing it is ours. The
+  supervisor re-reads shared memory before declaring anything lost — a worker killed *after* settling
+  its slot did leave a real answer — and fails only what is genuinely unsettled.
+
+### Known limits of the parallel surface, stated rather than discovered
+
+- **A shared channel needs capacity ≥ 1.** The substrate's cross-process rendezvous only accepts a
+  send while a sibling is parked inside *its* blocking `recv()`, which this runtime never calls.
+  Capacity 0 is refused at declaration instead of delivered as a channel that usually does nothing.
+- **The registry is keyed by class**, so `persist()` and the arena route of `ArenaTaskDirectory` hold
+  one live graph per class. A second concurrent task of one class is refused with the remedy named
+  (publish before the fork, or use distinct classes) rather than silently superseding a graph a
+  worker is still reading.
+- **One `SharedError` per store.** A second panic replaces the first, so `ParallelTaskException`
+  promises the panic it was handed and not a history of them.
+- **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
+  supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
+  assumes.
+
 ## Environment
 
 ### z-engine's line must match the running PHP minor
@@ -221,22 +293,24 @@ Not part of `composer test` — these run for a long time and are run deliberate
 ```bash
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 ```
 
 | Tool | Asserts | Exit codes |
 | --- | --- | --- |
 | `tools/soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb or growth past the tolerance fails | 0 flat, 1 climbing, 2 inconclusive |
 | `tools/soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
-| `tools/soak-arena-watermark.php` | **placeholder** — the arena lands with #7, so there is nothing to measure yet | 3 reserved |
+| `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, process memory stays flat, and no child survives. Leak-until-teardown is the design, so the criterion is a plateau, not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
 
-Both working tools can produce their own failure on demand (`--inject-leak`, `--self-test`). Use
-them after changing the detection logic: a detector nobody has seen fail is a detector nobody knows
-works.
+Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`). Use that
+after changing the detection logic: a detector nobody has seen fail is a detector nobody knows works.
+`soak-arena-watermark.php --self-test` rewrites a shared string property every round, which is the
+substrate's documented per-write arena cost, and must come back FAIL.
 
 ## Repository map
 
 ```
-src/Runtime.php            composition root; refuses workers/preemption with the ticket that lands them
+src/Runtime.php            composition root: scheduler, preemptor, shared arena, worker pool
 src/Scheduler.php          run queue, timer heap, the idle turn, deadlock detection
 src/Coroutine.php          a Fiber plus park/unpark bookkeeping; unpark does not schedule
 src/StreamPoller.php       the one stream_select() of the process; EINTR is routine, not an error
@@ -246,11 +320,15 @@ src/Context.php            cancellation modelled as a channel that closes
 src/Sync/                  WaitGroup, Once, Mutex — cooperative, FIFO, non-reentrant
 src/Io.php, src/Timer.php  the static surfaces onto the active scheduler
 src/Internal/              wait queues, wait nodes, deliveries, select cases
+src/Parallel/SharedArena.php        the family's shared memory: pre-fork composition, the
+                           per-process attach, the wake-socket bridge into the poller
+src/Parallel/SharedChannel.php      a substrate ring behind ChannelInterface, so it drops into Select
+src/Parallel/ArenaTaskDirectory.php task <-> arena address: pre-fork publication, or persist()
 src/Parallel/Protocol/     Tag, TaggedRecord, Opcode, ControlRecord — the value contract
 src/Exception/             the catchable failures, each naming its remedy
 tests/Functional/*.phpt    the suite, one behaviour per file
 tests/Support/             fakes for the unit-shaped tests
-tools/                     soak tooling (memory flatness, process hygiene, arena placeholder)
+tools/                     soak tooling (memory flatness, process hygiene, arena watermark)
 spikes/                    the preemption experiments and their verdicts; not run by composer test
 ```
 
