@@ -1,0 +1,11 @@
+PHP 8.4.19 | pid 12910
+3a FFI::cdef bound against (process symbols, soname=null)
+3b sizeof(struct timeval)=16 (expect 16), sizeof(struct itimerval)=32 (expect 32) => OK
+3c setitimer(ITIMER_REAL, 10ms repeating) rc=0 | getitimer readback: rc=0 it_interval=10000 us it_value=9996 us => MATCHES what was armed
+3c over 1.000 s: ticks=100 (expected ~100) rate=100.0/s
+3c interval ms: mean=10.000 sd=0.030 min=9.916 p50=9.998 p99=10.057 max=10.085 (n=99)
+3d second 0.5 s window WITHOUT re-arming: ticks=49 => KEEPS FIRING (repeating)
+3e forked child over 0.5 s: ticks=0 | getitimer in child: rc=0 it_interval=0 us it_value=0 us => TIMER CLEARED IN CHILD (as POSIX requires) — each worker MUST re-arm
+3e parent tick counter after fork: 200 (still armed before disarm); after disarm it_value=0 us
+VERDICT S3: GREEN — setitimer(ITIMER_REAL) via FFI delivers 100.0 SIGALRM/s at a 10 ms interval (mean 10.000 ms, sd 0.030 ms, max 10.085 ms), keeps firing without re-arming, and is CLEARED across pcntl_fork() (child saw 0 ticks, it_value=0) — every worker must re-arm post-fork.
+exit=0

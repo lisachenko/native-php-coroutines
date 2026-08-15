@@ -1,6 +1,10 @@
 parameters:
     level: max
     phpVersion: 80400
+    # tests/ is deliberately absent — a .phpt is not analysable and the fixtures exist to be shaped
+    # exactly as a test needs them. tools/ is analysed: the soak scripts are the code that decides
+    # whether a leak exists, so a wrong type there reports a green run that proved nothing.
     paths:
         - src
+        - tools
     treatPhpDocTypesAsCertain: false

@@ -1,0 +1,12 @@
+PHP 8.5.9 | vendor=/tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/autoload.php
+2a Core::init() OK — z-engine dev-master @ 29d2f3e0e0
+2b manual requestInterrupt(): hook fired 1 time(s) => OK
+2c reference 4.705 s | preempted work 3.851 s (-18.2%)
+2c hookFired=753 suspendTried=376 preemptions=376 badValues=0
+2c slice ms: mean=10.217 p99=11.231 max=24.215
+2c suspendErrors=0 first=(none) | proceedErrors=0
+2c result=599999994 reference=599999994 stateIntact=YES
+2e deadline-driven hook (no flag from the PHP handler): preemptions=105 in 1.073 s, hookFired=229 (2.18 per preemption), slice ms mean=10.153 max=11.933, errors=0 , result=CORRECT
+2d throw-escaping-FFI-callback probe: exit=255 (PHP fatal error) fatal=PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php on line 71
+VERDICT S2: GREEN — Fiber::suspend() is legal from a z-engine InterruptHook FFI callback; 376 preemptions, mean slice 10.22 ms, max 24.21 ms, state intact.
+exit=0

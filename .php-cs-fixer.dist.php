@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+// tests/ is deliberately absent: a .phpt is not a PHP file, and the fixtures under tests/Support
+// exist to be shaped exactly as a test needs them. tools/ is included — the soak scripts are
+// ordinary code that outlives the session that wrote them.
 $finder = PhpCsFixer\Finder::create()
-    ->in([__DIR__ . '/src'])
+    ->in([__DIR__ . '/src', __DIR__ . '/tools'])
     ->name('*.php')
     ->append([__FILE__]);
 
