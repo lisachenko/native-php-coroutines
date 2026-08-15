@@ -33,6 +33,28 @@ namespace Lisachenko\NativePhpCoroutines\Parallel\Protocol;
  * Everything is written in machine byte order and machine double representation, because the same
  * bytes are read by C code in a sibling process on the same machine. Fork guarantees that sibling
  * is the same binary on the same architecture, so there is no endianness question to answer.
+ *
+ * # Publication order — only in shared memory
+ *
+ * {@see self::encode()} and {@see self::decode()} are for the **control socket**, where the 16 bytes
+ * are one frame of an ordered byte stream and nothing can tear.
+ *
+ * A record living in a **shared-memory ring slot or result slot** is a different problem. The
+ * substrate spikes measured that a 16-byte record is *not* read atomically: roughly 1.3 % of
+ * unlocked reads saw the payload and the tag from different generations. So a record in the arena
+ * is only safe under one of two disciplines:
+ *
+ * 1. the whole access — write and read — happens under the slot's mutex; or
+ * 2. **the writer stores the payload first and the tag last, and the reader loads the tag first and
+ *    the payload second.** The tag is the publication flag: a reader that sees the new tag is
+ *    guaranteed to see the payload that was written before it.
+ *
+ * Never the mix. Writing the tag before the payload publishes a slot whose payload is still the
+ * previous generation's, and no amount of re-reading detects it.
+ *
+ * The eight-byte payload on its own *is* atomic when aligned, so a single-slot address read (an
+ * `OBJ`/`STR`/`ARR` pointer whose tag cannot change) may skip the lock and get old-or-new, never a
+ * mix. Do not over-lock that path.
  */
 final readonly class TaggedRecord
 {

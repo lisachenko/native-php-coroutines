@@ -30,11 +30,22 @@ final class NotShareableValueException extends \InvalidArgumentException impleme
         );
     }
 
+    /**
+     * A closure was offered to a worker boundary.
+     *
+     * When closure support lands, the check that replaces this blanket rejection must be based on
+     * **provenance — whether the closure was compiled before the fork barrier — and never on the
+     * closure's shape.** A post-fork closure cannot be recognised by inspection: the substrate
+     * spikes found a stale address holding a different, perfectly valid `Closure`, which on PHP 8.5
+     * executed the *wrong function* rather than failing. Anything that looks at bound variables,
+     * scope or arity to decide will pass that case.
+     */
     public static function forClosure(): self
     {
         return new self(
-            'a closure cannot cross a worker boundary: its bound variables and op_array are not '
-            . 'shareable. Implement the Task interface instead.',
+            'a closure cannot cross a worker boundary: only closures compiled before the workers '
+            . 'forked can be shared, and that is not supported yet. Implement the Task interface '
+            . 'instead.',
         );
     }
 

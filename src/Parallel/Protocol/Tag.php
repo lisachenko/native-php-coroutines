@@ -31,7 +31,24 @@ namespace Lisachenko\NativePhpCoroutines\Parallel\Protocol;
  * A plain `zend_array` is deliberately absent: the engine grows a HashTable's storage through
  * `pemalloc` into process-local heap, with no hook to redirect it, so a shared plain array would
  * silently acquire memory that its siblings cannot see. `SharedArray` exists for exactly that
- * reason.
+ * reason. The substrate spikes sharpened *why* this is non-negotiable: a growing table writes the
+ * private-heap `arData` pointer into the shared struct **before** it aborts, so siblings go on
+ * reading plausible garbage with no signal at all. Silent corruption, not a crash.
+ *
+ * # What "zero-copy" does not mean
+ *
+ * `OBJ` being zero-copy means the address *is* the value — not that touching it is free of rules:
+ *
+ * - **Never `var_dump()`, `json_encode()`, `get_object_vars()` or `(array)` a shared object**
+ *   unless the extension's `get_properties_for` interception is active. Those read-shaped
+ *   operations make engine C code *write* a per-process `properties` pointer into the shared
+ *   struct, which segfaults every sibling that reads it afterwards. This applies to the runtime's
+ *   own diagnostics — a panic trace or a debug dump is exactly the kind of code that reaches for
+ *   `var_dump()` on the value it is reporting.
+ * - **Never key a shared object by `spl_object_id()` or put one in an `SplObjectStorage`.** Forked
+ *   children inherit the same object-store free list and hand out *identical* handle numbers, so
+ *   handles collide by construction. Arena address is the only identity that means anything across
+ *   processes.
  */
 enum Tag: int
 {
