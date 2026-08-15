@@ -65,6 +65,16 @@ final class Coroutine implements CoroutineInterface
 
     private bool $externallyWakeable = false;
 
+    /**
+     * The command the fiber last suspended with, or null before its first suspension and after it
+     * has finished.
+     *
+     * This is how the scheduler tells *where* the fiber is parked, which Layer 2 makes into a
+     * safety property: a fiber that last suspended with {@see SuspendCommand::PREEMPT} is parked
+     * inside the preemption callback rather than in code it wrote itself.
+     */
+    private ?SuspendCommand $lastSuspend = null;
+
     private mixed $returnValue = null;
 
     /**
@@ -203,9 +213,109 @@ final class Coroutine implements CoroutineInterface
         // have parked it on something.
         $command = $signal instanceof SuspendCommand ? $signal : SuspendCommand::YIELD;
 
-        $this->status = $command->staysRunnable() ? CoroutineStatus::READY : CoroutineStatus::BLOCKED;
+        $this->status      = $command->staysRunnable() ? CoroutineStatus::READY : CoroutineStatus::BLOCKED;
+        $this->lastSuspend = $command;
 
         return $command;
+    }
+
+    /**
+     * Resume the coroutine by throwing $reason at its suspension point.
+     *
+     * Only legal where the coroutine chose to suspend. A preempted coroutine is suspended at an
+     * arbitrary opcode boundary *inside the preemption callback*, so an injected exception would
+     * not surface in the coroutine's own code at all: it would surface in an FFI callback, where
+     * the mandatory guard swallows it (the cancellation vanishes and the coroutine runs on) or,
+     * without that guard, it takes the whole process down. Cancellation of a preempted coroutine is
+     * a flag it consumes at its next cooperative point, never a throw.
+     *
+     * @internal Only the scheduler may call this.
+     * @return SuspendCommand|null The reason it handed control back, or null when it finished.
+     */
+    public function throwInto(\Throwable $reason): ?SuspendCommand
+    {
+        // Null covers both ends of the lifecycle: a coroutine that has not run yet, and one that
+        // has finished — markDone() clears it.
+        $suspend = $this->lastSuspend ?? throw new \LogicException(sprintf(
+            'coroutine #%d is not suspended and cannot be thrown into',
+            $this->id,
+        ));
+
+        if (!$suspend->allowsThrow()) {
+            throw new \LogicException(sprintf(
+                'coroutine #%d is suspended by %s and must not be thrown into; resume it with '
+                . 'resume(null) and let it observe a cancellation flag at a cooperative point',
+                $this->id,
+                $suspend->name,
+            ));
+        }
+
+        $this->status = CoroutineStatus::RUNNING;
+        $this->queued = false;
+
+        try {
+            $signal = $this->fiber->throw($reason);
+        } catch (\Throwable $panic) {
+            $this->markDone();
+
+            throw $panic;
+        }
+
+        if ($this->fiber->isTerminated()) {
+            $this->returnValue = $this->fiber->getReturn();
+            $this->markDone();
+
+            return null;
+        }
+
+        $command = $signal instanceof SuspendCommand ? $signal : SuspendCommand::YIELD;
+
+        $this->status      = $command->staysRunnable() ? CoroutineStatus::READY : CoroutineStatus::BLOCKED;
+        $this->lastSuspend = $command;
+
+        return $command;
+    }
+
+    /**
+     * The command this coroutine last suspended with.
+     *
+     * @internal Bookkeeping for the scheduler.
+     */
+    public function lastSuspend(): ?SuspendCommand
+    {
+        return $this->lastSuspend;
+    }
+
+    /**
+     * Whether this coroutine is parked inside the preemption callback right now.
+     *
+     * A coroutine in this state is not disposable: dropping the last reference to it, or letting
+     * the engine destroy it at request shutdown, is a fatal error. It must be resumed until it
+     * leaves the callback — that is what {@see Scheduler::drainPreempted()} does.
+     *
+     * @internal
+     */
+    public function isPreemptSuspended(): bool
+    {
+        return $this->lastSuspend === SuspendCommand::PREEMPT
+            && $this->status !== CoroutineStatus::DONE
+            && $this->fiber->isStarted()
+            && !$this->fiber->isTerminated();
+    }
+
+    /**
+     * Whether the fiber executing right now is this coroutine's own.
+     *
+     * The preemption callback fires in whatever fiber the interrupt landed in, which is not
+     * necessarily one of ours: an application is free to drive its own `\Fiber` inside a coroutine,
+     * and suspending *that* would hand a preemption command to a resume site that never asked for
+     * one.
+     *
+     * @internal
+     */
+    public function ownsCurrentFiber(): bool
+    {
+        return \Fiber::getCurrent() === $this->fiber;
     }
 
     /** @internal Bookkeeping for the scheduler's run queue. */
@@ -233,6 +343,7 @@ final class Coroutine implements CoroutineInterface
         $this->queued             = false;
         $this->waitDescription    = null;
         $this->externallyWakeable = false;
+        $this->lastSuspend        = null;
     }
 
     /**
