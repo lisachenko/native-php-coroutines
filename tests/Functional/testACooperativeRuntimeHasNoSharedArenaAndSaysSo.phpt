@@ -1,5 +1,5 @@
 --TEST--
-The runtime refuses the parallel surface with a message naming the ticket that ships it
+A runtime without workers maps no arena and refuses the shared surface with the remedy named
 --INI--
 ffi.enable=1
 opcache.jit=off
@@ -15,13 +15,11 @@ use Lisachenko\NativePhpCoroutines\RuntimeInterface;
 
 include __DIR__ . '/../../vendor/autoload.php';
 
-try {
-    new Runtime(workers: 4);
-} catch (LogicException $refusal) {
-    echo $refusal->getMessage(), PHP_EOL;
-}
-
+// workers: 0 is a promise, not a placeholder — no mmap, no FFI for the arena, no wake sockets. The
+// shared surface is refused rather than half-composed, and every refusal says how to get it.
 $runtime = new Runtime();
+
+echo 'arena mapped: ', $runtime->arena() === null ? 'no' : 'yes', PHP_EOL;
 
 $task = new class implements Task {
     public function run(RuntimeInterface $runtime): mixed
@@ -34,6 +32,7 @@ foreach ([
     static fn (): mixed => $runtime->declareShared('jobs', 'SharedChannel', 8),
     static fn (): mixed => $runtime->shared('jobs'),
     static fn (): mixed => $runtime->persist(new stdClass()),
+    static fn (): mixed => $runtime->attachResult(1),
     static fn (): mixed => $runtime->spawnParallel($task),
 ] as $callable) {
     try {
@@ -49,9 +48,10 @@ $runtime->run(static function (RuntimeInterface $self): void {
 });
 ?>
 --EXPECT--
-parallel workers are not implemented yet (see #7); construct the runtime with workers: 0 instead of 4
-shared roots are not implemented yet (see #7)
-shared roots are not implemented yet (see #7)
-persisting objects into the shared arena is not implemented yet (see #7)
-parallel workers are not implemented yet (see #7)
+arena mapped: no
+shared roots need the shared arena, which a runtime only maps when it has workers; construct it with workers: N
+shared roots need the shared arena, which a runtime only maps when it has workers; construct it with workers: N
+persisting objects into the shared arena needs the shared arena, which a runtime only maps when it has workers; construct it with workers: N
+result slots live in the shared arena; construct the runtime with workers: N
+this runtime has no workers; construct it with workers: N to run tasks in parallel
 the local scheduler is live: yes

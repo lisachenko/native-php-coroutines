@@ -64,6 +64,15 @@ interface RuntimeInterface
     public function spawnParallel(Task $task, ?int $worker = null): JoinHandleInterface;
 
     /**
+     * Take a handle on a result slot this process did not open.
+     *
+     * A slot id is the whole handle. The state lives in shared memory, so any process of the family
+     * can read it, park on it and take its value — including a worker awaiting a task the parent
+     * spawned somewhere else, and including a process that only learned the id afterwards.
+     */
+    public function attachResult(int $slotId): JoinHandleInterface;
+
+    /**
      * Run the main coroutine to completion.
      *
      * Go semantics: when main returns, coroutines that are still pending are **discarded**, not

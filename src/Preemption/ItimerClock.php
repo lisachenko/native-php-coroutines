@@ -204,10 +204,13 @@ final class ItimerClock
         $result = $call(...$arguments);
 
         if ($result !== 0) {
+            // Rendered by hand rather than with var_export(): the Never-Serialize Rule is enforced
+            // by a scan of the shipped source, and a byte-encoder of PHP values has no business
+            // being reachable from this package at all — not even in an error message about an int.
             throw new \RuntimeException(sprintf(
                 '%s(ITIMER_REAL) failed, returning %s',
                 $function,
-                var_export($result, true),
+                is_int($result) ? (string) $result : get_debug_type($result),
             ));
         }
     }

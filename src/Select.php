@@ -127,6 +127,18 @@ final class Select
         return $this->park($order);
     }
 
+    /** Whether any case's readiness is decided outside this process. */
+    private function hasExternalCase(): bool
+    {
+        foreach ($this->cases as $case) {
+            if ($case->channel->readinessFd() !== null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Complete a case that the poll already proved ready, so nothing here can park.
      */
@@ -167,7 +179,15 @@ final class Select
             }
         }
 
-        $coroutine->park(sprintf('select on %d channels', count($this->cases)));
+        // Externally wakeable as soon as one case is a cross-process channel: the value this select
+        // is waiting for may be written by a process that is not this one, so no amount of local
+        // scheduling could produce the wakeup and a deadlock report must not count this coroutine.
+        // A select over purely local channels stays locally wakeable, which is what keeps the
+        // Layer 1 deadlock report honest.
+        $coroutine->park(
+            sprintf('select on %d channels', count($this->cases)),
+            $this->hasExternalCase(),
+        );
         $this->scheduler->suspend(SuspendCommand::BLOCKED);
 
         // Unlink before touching the result: every case is asked, including the winner's channel,

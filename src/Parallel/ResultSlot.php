@@ -18,24 +18,33 @@ use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
 /**
  * One outstanding result, as the waiting process sees it.
  *
- * # Seam for ticket #7
+ * # What moved into shared memory, and what did not
  *
- * The real slot is `{state, 16-byte tagged record}` **in the shared arena**, so that any process in
- * the tree can complete it and any process can read it. This class is that slot's parent-side half:
- * the identity, the owning worker, the completion state and the coroutines parked on it. Nothing
- * here is on the wire — the `RESULT` record names a slot and carries the tagged value, and this is
- * where the parent puts it down.
+ * With an arena the authoritative slot is `{state, tag, payload, waiter table}` **in shared
+ * memory**, owned by the substrate's `ResultSlotTable`: any process in the family can settle it and
+ * any process can read it. This class is that slot's per-process half — the identity, the owning
+ * worker, the *local* view of completion, and the coroutines parked on it. A parked coroutine is a
+ * per-process thing and stays here by construction.
  *
- * When the arena lands, {@see self::$value} and {@see self::$complete} move into shared memory under
- * the publication order the tagged-record contract spells out (payload first, tag last), and the
- * waiter list stays here, because a parked coroutine is a per-process thing.
+ * {@see self::$decoded} is the value read out of the shared slot, materialized after the slot's
+ * lock was released. {@see self::$value} is the record path used when there is no arena, where the
+ * whole value is complete inside sixteen bytes. Exactly one of the two is ever set.
+ *
+ * Nothing here is on the wire: a `RESULT` record names a slot and says "settled", and the value is
+ * read from the arena rather than from the socket.
  */
 final class ResultSlot
 {
     public bool $complete = false;
 
-    /** The outcome, once complete and successful. */
+    /** The outcome as a record, once complete and successful — the path that needs no arena. */
     public ?TaggedRecord $value = null;
+
+    /** The outcome read out of the shared slot; only meaningful with {@see self::$hasDecoded}. */
+    public mixed $decoded = null;
+
+    /** Whether {@see self::$decoded} holds the answer, as opposed to {@see self::$value}. */
+    public bool $hasDecoded = false;
 
     /** The outcome, once complete and failed: a task panic or the death of its worker. */
     public ?\Throwable $error = null;

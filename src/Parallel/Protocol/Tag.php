@@ -27,6 +27,15 @@ namespace Lisachenko\NativePhpCoroutines\Parallel\Protocol;
  * | OBJ                | arena `zend_object*`   | zero-copy: the address is the value               |
  * | ARR                | arena `SharedArray*`   | zero-copy                                         |
  * | CLOSE              | none                   | ring / protocol control                           |
+ * | CLOSURE            | arena provenance record| zero-copy; pre-fork closures only                 |
+ *
+ * # The numbers are the wire contract
+ *
+ * These cases are numerically identical to the substrate's `Lisachenko\SharedData\Ipc\ValueTag`,
+ * which states that tag numbers are this runtime's wire contract and are never renumbered. A record
+ * written by the substrate is read by this enum and the other way round, so the two enums are one
+ * table with two spellings — `NIL = 0 … CLOSE = 8`, and `CLOSURE = 9` appended by the substrate's
+ * pre-fork closure support. Renumbering either side silently reinterprets every record in flight.
  *
  * A plain `zend_array` is deliberately absent: the engine grows a HashTable's storage through
  * `pemalloc` into process-local heap, with no hook to redirect it, so a shared plain array would
@@ -62,12 +71,23 @@ enum Tag: int
     case ARR   = 7;
     case CLOSE = 8;
 
+    /**
+     * A closure the arena-owning process registered **before** the fork barrier.
+     *
+     * The payload is the address of its provenance record, never of the closure object: acceptance
+     * is a table lookup on a pre-fork registration and never an inspection of the object. A
+     * post-fork closure at a stale address is indistinguishable by shape from a legitimate one —
+     * the substrate spikes found such an address holding a different, perfectly valid `Closure`
+     * that on PHP 8.5 executed the *wrong function*.
+     */
+    case CLOSURE = 9;
+
     /** Whether the payload is an arena address rather than an inline value. */
     public function isAddress(): bool
     {
         return match ($this) {
-            self::STR, self::OBJ, self::ARR => true,
-            default                         => false,
+            self::STR, self::OBJ, self::ARR, self::CLOSURE => true,
+            default                                        => false,
         };
     }
 

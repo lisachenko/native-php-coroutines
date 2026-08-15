@@ -85,6 +85,9 @@ final class Context
             return $child;
         }
 
+        // @local-identity — a Context never enters the arena, so the object-store handle really is
+        // its identity here. A shared object may never be keyed this way: forked children inherit
+        // one free list and are handed identical handles for different objects.
         $parent->children[spl_object_id($child)] = $child;
 
         return $child;
@@ -167,6 +170,7 @@ final class Context
 
     private function detach(self $child): void
     {
+        // @local-identity — see attach(): a Context is process-local by construction.
         unset($this->children[spl_object_id($child)]);
     }
 }
