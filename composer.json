@@ -12,6 +12,7 @@
     ],
     "require": {
         "php": "^8.4",
+        "ext-ffi": "*",
         "lisachenko/z-engine": "8.4.x-dev || 8.5.x-dev"
     },
     "minimum-stability": "dev",
@@ -22,7 +23,6 @@
         "phpunit/phpunit": "^12.5"
     },
     "suggest": {
-        "ext-ffi": "Required for preemptive scheduling and for parallel workers (workers > 0); Layer 1 needs no FFI",
         "ext-pcntl": "Required for parallel workers (fork, signal handling) and for preemption",
         "ext-posix": "Required for worker supervision"
     },
