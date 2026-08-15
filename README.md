@@ -4,9 +4,10 @@ Go-style coroutines for PHP: **concurrency** within a process on native `Fiber`,
 parallelism** across forked workers that exchange real shared PHP objects — with **zero
 serialization** on the data path.
 
-> **Status: in implementation.** Layer 1 — the cooperative runtime — is merged and is what the
-> examples below run against. Preemption and the parallel layer are not; the runtime refuses them by
-> name rather than half-working. See the
+> **Status: in implementation.** All three layers are merged — the cooperative runtime, preemptive
+> time slices, and the parallel layer over a fork-shared arena. `new Runtime()` composes exactly what
+> Layer 1 always did: no arena, no FFI, no workers. `workers: N` maps the arena and forks the pool;
+> `preemptive: true` adds the engine hook. See the
 > [EPIC](https://github.com/lisachenko/native-php-coroutines/issues/1) for the board.
 
 ## The model, in one sentence
@@ -375,6 +376,72 @@ produce.
 `STR` is one structural memcpy into the arena, `OBJ` and `ARR` are zero-copy addresses, and anything
 else throws `NotShareableValueException` naming the remedy.
 
+## Parallelism across workers
+
+```php
+use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
+use Lisachenko\NativePhpCoroutines\Parallel\Task;
+use Lisachenko\NativePhpCoroutines\Runtime;
+use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+
+final class Report
+{
+    public int $rows = 0;
+    public string $status = 'pending';
+}
+
+final class BuildReport implements Task
+{
+    public function run(RuntimeInterface $runtime): mixed
+    {
+        $report = $runtime->shared('report');
+
+        // The synchronized write path. A bare $report->rows = ... is legal and visible, but it is
+        // unsynchronized: a shared object is rewired to std_object_handlers, so there is no write
+        // hook that could take the stripe lock for you.
+        $handle = $runtime->arena()->store()->mutableHandle($report);
+        $handle->writeScalar('rows', 128);
+        $handle->writeString('status', 'done');
+
+        return $report;
+    }
+}
+
+$runtime = new Runtime(workers: 4);
+
+// Everything shared is created BEFORE run() forks. A root declared afterwards would exist only in
+// the process that declared it, so it is refused with a message that says so.
+$runtime->declareShared('report', Report::class);
+$runtime->declareShared('jobs', SharedChannel::class, 64);
+$runtime->publishTask($task = new BuildReport());
+
+$report = $runtime->shared('report');
+
+$runtime->run(function (RuntimeInterface $runtime) use ($task, $report): void {
+    $returned = $runtime->spawnParallel($task)->await();
+
+    var_dump($returned === $report);  // true — the address is the value, not a copy of it
+    echo $report->status;             // "done", written in another process
+});
+```
+
+- **`spawnParallel()` returns a `JoinHandle`.** `await()` parks the calling coroutine on the poller,
+  wakes on the settled slot and reads the value **straight out of shared memory**. A slot that is
+  already settled returns without parking, and a slot may be awaited from any process of the family —
+  `attachResult($slotId)` is the handle for that.
+- **A `SharedChannel` is a `ChannelInterface`**, so it drops into `Select` next to a local `Channel`
+  and one `select` statement can mix the two. Its `readinessFd()` is the arena's wake socket, which
+  the poller drains on every readiness — level-triggered pokes, so an undrained pipe would spin.
+- **A panic in a task** surfaces at `await()` as `ParallelTaskException` carrying the original class,
+  message and trace, moved into the arena as three arena strings. The `Throwable` itself never
+  crosses, and nothing on that path is serialized.
+- **A worker that dies owing a result** fails its waiter with `WorkerCrashedException` rather than
+  leaving a coroutine parked for the rest of the run — including a worker killed while it held an
+  arena lock.
+- **Closures cross only by provenance.** `registerSharedClosure($name, $closure)` before the fork
+  makes one shareable for the life of the family; a closure created afterwards is refused, because no
+  inspection can tell it apart from a stale address holding a different, perfectly valid `Closure`.
+
 ## Layers
 
 | Layer | What it gives you | FFI |
@@ -410,8 +477,19 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 - **An uncaught throwable is a panic**: it ends the run and comes back out of `Runtime::run()`.
 - **Sharing is fork-only.** Shared objects are valid because children inherit an identical address
   layout; there is no attach-by-key across unrelated processes.
-- **Plain arrays and closures are not shareable.** Use `SharedArray` and `Task` respectively;
-  anything else throws `NotShareableValueException` naming the remedy.
+- **Plain arrays are not shareable.** Use `SharedArray`; a plain array grows into the private heap of
+  whichever process filled it. Closures are shareable only by **pre-fork registration**
+  (`registerSharedClosure()`); work created after the fork travels as a `Task`. Anything else throws
+  `NotShareableValueException` naming the remedy.
+- **A shared channel needs capacity ≥ 1.** A cross-process rendezvous only accepts a send while a
+  sibling is parked inside the substrate's own blocking `recv()`, and this runtime parks Fibers on its
+  poller instead — so capacity 0 is refused rather than delivered as a channel that usually does
+  nothing.
+- **`persist()` and shared roots are keyed by class.** One live graph per class: a second instance
+  supersedes the first, so a design that needs several gives them distinct classes or a `SharedArray`.
+- **The arena is a bump allocator with no free list.** Blocks are reclaimed when the region dies with
+  the creating process, and rewriting a shared string property costs a block per write. Size for it,
+  and watch the watermark **plateau** rather than expecting it to fall.
 - **Never `var_dump()`, `json_encode()`, `get_object_vars()` or `(array)` a shared object** — those
   read-shaped operations make engine C code write a per-process `properties` pointer into the shared
   struct and segfault every sibling. Diagnostics are the code most likely to do it.
@@ -425,7 +503,8 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 - **Preemption is opt-in** (`new Runtime(preemptive: true)`) and, once armed, makes coroutine
   lifetimes the scheduler's business: a preempted coroutine is suspended inside an engine callback,
   so it is drained rather than discarded when a run ends.
-- **`workers > 0` is refused today**, with a message naming the ticket that implements it.
+- **`workers: 0` maps no arena at all.** The shared surface is then refused with a message naming the
+  remedy rather than half-composed — a cooperative runtime stays exactly as cheap as it was.
 
 ## Development
 
@@ -450,16 +529,18 @@ Long-running checks, run deliberately, not part of `composer test`:
 ```bash
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 ```
 
 | Tool | Asserts | Exit codes |
 | --- | --- | --- |
 | `soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb, or growth past `--tolerance`, fails | 0 flat, 1 climbing, 2 inconclusive |
 | `soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
-| `soak-arena-watermark.php` | **placeholder** — the shared arena lands with #7, so there is nothing to measure yet | 3 reserved |
+| `soak-arena-watermark.php` | the arena watermark **plateaus** under a steady-state parallel workload, process memory stays flat, and no child survives. The arena is a bump allocator with no free list, so the criterion is a plateau and not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
 
-Each working tool can produce its own failure on demand — `--inject-leak` and `--self-test` — so the
-detector itself is testable.
+Each tool can produce its own failure on demand — `--inject-leak` and `--self-test` — so the detector
+itself is testable. `soak-arena-watermark.php --self-test` rewrites a shared string property every
+round, which costs an arena block per write by design, and must come back FAIL.
 
 ## License
 

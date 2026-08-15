@@ -131,14 +131,68 @@ final readonly class TaggedRecord
     /** Serialise to the 16 wire bytes. */
     public function encode(): string
     {
-        $payload = match (true) {
+        return pack('C', $this->tag->value)
+            . str_repeat("\0", self::PAYLOAD_OFFSET - 1)
+            . $this->encodePayload();
+    }
+
+    /**
+     * The eight payload bytes on their own, without the tag byte and its padding.
+     *
+     * {@see ControlRecord} carries the tag in its own header byte and the payload in its trailing
+     * eight, so it needs the halves separately rather than the whole self-describing record.
+     */
+    public function encodePayload(): string
+    {
+        return match (true) {
             $this->tag->isPayloadless() => pack('Q', 0),
             $this->tag === Tag::INT     => pack('q', (int) $this->payload),
             $this->tag === Tag::FLOAT   => pack('d', (float) $this->payload),
             default                     => pack('Q', (int) $this->payload),
         };
+    }
 
-        return pack('C', $this->tag->value) . str_repeat("\0", self::PAYLOAD_OFFSET - 1) . $payload;
+    /**
+     * Rebuild a record from a tag byte and its eight payload bytes, held apart.
+     *
+     * @param string $payload At least {@see self::PAYLOAD_SIZE} bytes; anything beyond is ignored.
+     *
+     * @throws \DomainException          When the tag byte is not a known tag.
+     * @throws \LengthException          When there are fewer than eight payload bytes.
+     * @throws \UnexpectedValueException When the payload cannot be unpacked at all.
+     */
+    public static function decodePayload(int $tagByte, string $payload): self
+    {
+        $tag = Tag::tryFrom($tagByte);
+        if ($tag === null) {
+            throw new \DomainException(sprintf('Unknown record tag %d', $tagByte));
+        }
+
+        if ($tag->isPayloadless()) {
+            return new self($tag, 0);
+        }
+
+        if (strlen($payload) < self::PAYLOAD_SIZE) {
+            throw new \LengthException(sprintf(
+                'A record payload is %d bytes, got %d',
+                self::PAYLOAD_SIZE,
+                strlen($payload),
+            ));
+        }
+
+        $format = match ($tag) {
+            Tag::INT   => 'qvalue',
+            Tag::FLOAT => 'dvalue',
+            default    => 'Qvalue',
+        };
+
+        $unpacked = unpack($format, $payload);
+        $value    = is_array($unpacked) ? $unpacked['value'] ?? null : null;
+        if (!is_int($value) && !is_float($value)) {
+            throw new \UnexpectedValueException('Unable to read the payload of a tagged record');
+        }
+
+        return new self($tag, $value);
     }
 
     /**
@@ -162,26 +216,6 @@ final readonly class TaggedRecord
             throw new \UnexpectedValueException('Unable to read the tag of a tagged record');
         }
 
-        $tag = Tag::tryFrom($tagByte);
-        if ($tag === null) {
-            throw new \DomainException(sprintf('Unknown record tag %d', $tagByte));
-        }
-
-        if ($tag->isPayloadless()) {
-            return new self($tag, 0);
-        }
-
-        $format = match ($tag) {
-            Tag::INT   => 'qvalue',
-            Tag::FLOAT => 'dvalue',
-            default    => 'Qvalue',
-        };
-        $payload = unpack($format, $bytes, self::PAYLOAD_OFFSET);
-        $value   = is_array($payload) ? $payload['value'] ?? null : null;
-        if (!is_int($value) && !is_float($value)) {
-            throw new \UnexpectedValueException('Unable to read the payload of a tagged record');
-        }
-
-        return new self($tag, $value);
+        return self::decodePayload($tagByte, substr($bytes, self::PAYLOAD_OFFSET));
     }
 }

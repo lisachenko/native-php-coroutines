@@ -31,21 +31,23 @@ final class NotShareableValueException extends \InvalidArgumentException impleme
     }
 
     /**
-     * A closure was offered to a worker boundary.
+     * A closure was offered to a worker boundary without having been registered before the fork.
      *
-     * When closure support lands, the check that replaces this blanket rejection must be based on
-     * **provenance — whether the closure was compiled before the fork barrier — and never on the
-     * closure's shape.** A post-fork closure cannot be recognised by inspection: the substrate
-     * spikes found a stale address holding a different, perfectly valid `Closure`, which on PHP 8.5
-     * executed the *wrong function* rather than failing. Anything that looks at bound variables,
-     * scope or arity to decide will pass that case.
+     * Acceptance is **provenance — whether the closure was compiled before the fork barrier — and
+     * never the closure's shape.** A post-fork closure cannot be recognised by inspection: the
+     * substrate spikes found a stale address holding a different, perfectly valid `Closure`, which
+     * on PHP 8.5 executed the *wrong function* rather than failing. Anything that looks at bound
+     * variables, scope or arity to decide will pass that case and hand the caller a silent wrong
+     * answer, which is why registration is the whole test.
      */
     public static function forClosure(): self
     {
         return new self(
-            'a closure cannot cross a worker boundary: only closures compiled before the workers '
-            . 'forked can be shared, and that is not supported yet. Implement the Task interface '
-            . 'instead.',
+            'a closure cannot cross a worker boundary unless it was registered before the fork: '
+            . 'call $runtime->registerSharedClosure($name, $closure) while the pool is still being '
+            . 'configured, and it is shareable for the life of the family. A closure created after '
+            . 'the fork can never be shared — no inspection can tell it apart from a valid one at a '
+            . 'stale address — so work created then travels as a Task instead.',
         );
     }
 

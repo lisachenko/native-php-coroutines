@@ -18,6 +18,9 @@ use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
 use Lisachenko\NativePhpCoroutines\Runtime;
 use Lisachenko\NativePhpCoroutines\RuntimeInterface;
 use Lisachenko\NativePhpCoroutines\SchedulerInterface;
+use Lisachenko\SharedData\Ipc\SharedError;
+use Lisachenko\SharedData\Ipc\ValueTag;
+use Lisachenko\SharedData\Ipc\WakeOpcode;
 
 /**
  * What a forked worker does with the rest of its life.
@@ -25,11 +28,28 @@ use Lisachenko\NativePhpCoroutines\SchedulerInterface;
  * The whole loop is one idea: **the inbox is just another readable descriptor**. The control socket
  * is registered with {@see \Lisachenko\NativePhpCoroutines\PollerInterface::watchReadable()}, so a
  * worker waiting for work is parked in the same `stream_select()` as a worker waiting for a timer or
- * a socket. There is no second event loop, no polling thread, and no blocking read anywhere.
+ * a socket. There is no second event loop, no polling thread, and no blocking read anywhere. The
+ * arena's wake pipe joins that same `stream_select()` through {@see SharedArena::watchWith()}.
  *
  * A `SPAWN` record starts an ordinary local coroutine. That is the point of running a full scheduler
  * in the child rather than a `while (true) { read(); work(); }` loop: a task that sleeps or does IO
  * yields to its siblings and to the inbox instead of stalling the worker.
+ *
+ * # The two seams, and why there are two
+ *
+ * A forked child has to be handed two different things at two different moments, and collapsing
+ * them into one is the silent-failure this class exists to prevent:
+ *
+ * - `$afterFork` runs in {@see ProcessWorker::runChild()}, **before any scheduler or fiber exists**.
+ *   That is where a process-global concern belongs — re-arming the interval timer `fork()` cleared.
+ * - `$afterScheduler` runs **here**, right after this process's own scheduler is built and before
+ *   the first coroutine is spawned on it. That is where anything bound to *this* scheduler belongs:
+ *   attaching a {@see \Lisachenko\NativePhpCoroutines\Preemption\Preemptor}, which decides whether
+ *   to preempt by asking `$scheduler->current()` and is therefore useless bound to the parent's.
+ *
+ * Re-arming the inherited parent preemptor instead would arm the timer correctly and leave the
+ * binding stale, so `shouldPreempt()` would consult a scheduler that never runs anything and answer
+ * false forever: **the child would never be preempted, with nothing anywhere reporting it.**
  *
  * # Exit on EOF is a safety property, not a convenience
  *
@@ -56,27 +76,46 @@ final class WorkerChild
         private readonly TaskDirectory $tasks,
         private readonly RuntimeInterface $runtime,
         private readonly SchedulerInterface $scheduler,
+        private readonly ?SharedArena $arena,
     ) {}
 
     /**
      * Serve this worker's inbox until the parent says stop or goes away.
      *
-     * @param ControlSocket        $control The child's end of the pair; this call owns and closes it.
-     * @param RuntimeInterface|null $runtime The runtime tasks are handed. Created here by default,
-     *                                       **after** the fork: constructing it creates this
-     *                                       process's scheduler, and a scheduler — and every fiber
-     *                                       under it — must be born on this side of the fork.
+     * @param ControlSocket         $control        The child's end of the pair; this call owns and
+     *                                              closes it.
+     * @param RuntimeInterface|null $runtime        The runtime tasks are handed. Created here by
+     *                                              default, **after** the fork: constructing it
+     *                                              creates this process's scheduler, and a
+     *                                              scheduler — and every fiber under it — must be
+     *                                              born on this side of the fork.
+     * @param SharedArena|null      $arena          The family's shared memory, inherited from the
+     *                                              parent; re-attached here for this process.
+     * @param (\Closure(int, SchedulerInterface): void)|null $afterScheduler Runs once this
+     *                                              process's scheduler exists and before any
+     *                                              coroutine is spawned on it.
      * @return int The process exit status; 0 for an orderly end.
      */
     public static function main(
         ControlSocket $control,
         TaskDirectory $tasks,
         ?RuntimeInterface $runtime = null,
+        ?SharedArena $arena = null,
+        ?\Closure $afterScheduler = null,
+        int $workerId = 0,
     ): int {
-        $runtime   = $runtime ?? new Runtime();
+        $runtime   = $runtime ?? new Runtime(arena: $arena);
         $scheduler = $runtime->scheduler();
 
-        $child = new self($control, $tasks, $runtime, $scheduler);
+        // Before anything is spawned: this process claims its own wake slot, drops the parent's
+        // materialized roots and puts the wake socket in its own poller.
+        $arena?->watchWith($scheduler);
+
+        if ($afterScheduler !== null) {
+            $afterScheduler($workerId, $scheduler);
+        }
+
+        $child = new self($control, $tasks, $runtime, $scheduler, $arena);
         $child->listen();
 
         // Returns once the watch is dropped and nothing is left to run: EOF or a SHUTDOWN record
@@ -130,8 +169,8 @@ final class WorkerChild
             return;
         }
 
-        // WAKE and CLOSE belong to cross-process channels, which do not exist yet; there is nothing
-        // to re-check, so ignoring them is the correct behaviour rather than a gap.
+        // WAKE and CLOSE are re-check pokes; the arena's own wake socket carries the ones that
+        // matter and drains itself, so there is nothing to do for one that arrives here.
         //
         // RESULT and PANIC travel the other way. A parent that sends one is misbehaving, and taking
         // the worker down over a record it can simply not act on would turn a parent-side bug into
@@ -156,7 +195,9 @@ final class WorkerChild
                 $this->control->send($reply);
             } catch (\Throwable) {
                 // The parent is gone. The outcome has nowhere to go, and the EOF path is already
-                // unwinding this process — losing the answer is the only thing left to do.
+                // unwinding this process — losing the answer is the only thing left to do. With an
+                // arena the answer is in shared memory anyway, and the family broadcast has already
+                // gone out.
             }
 
             $this->finishIfIdle();
@@ -168,20 +209,51 @@ final class WorkerChild
      */
     private function execute(int $slotId, int $address): ControlRecord
     {
+        $arena = $this->arena;
+
+        if ($arena === null) {
+            return $this->executeWithoutArena($slotId, $address);
+        }
+
+        try {
+            $value = $this->tasks->taskAt($address)->run($this->runtime);
+        } catch (\Throwable $panic) {
+            // The class, message and trace move into the arena as three arena strings on one shared
+            // object; the Throwable itself can never cross, and is never serialized to make it.
+            // Nothing on this path dumps the offending value: a panic handler is exactly the code
+            // that would reach for var_dump() on a shared object and segfault every sibling.
+            $errorAddress = SharedError::capture($arena->store(), $panic);
+
+            $arena->slotTable()->completePanic($slotId, $errorAddress);
+            $arena->notifyFamily(WakeOpcode::Panic, $slotId, ValueTag::Obj, $errorAddress);
+
+            return new ControlRecord(Opcode::PANIC, $slotId, TaggedRecord::nil());
+        }
+
+        // Settled in shared memory first, announced second: a waiter that hears the announcement
+        // must find the slot already settled, or the wakeup it was given is worth nothing.
+        $arena->slotTable()->complete($slotId, $value);
+        $arena->notifyFamily(WakeOpcode::Result, $slotId, ValueTag::Nil);
+
+        return new ControlRecord(Opcode::RESULT, $slotId, TaggedRecord::nil());
+    }
+
+    /**
+     * The no-arena path: the value has to be complete inside sixteen bytes or it cannot travel.
+     *
+     * Reachable when a supervisor is driven directly with a {@see PreforkTaskDirectory} and no
+     * shared memory — the shape Layer P's own tests use to exercise supervision on its own.
+     */
+    private function executeWithoutArena(int $slotId, int $address): ControlRecord
+    {
         try {
             $value    = $this->tasks->taskAt($address)->run($this->runtime);
             $arenaTag = ValueCodec::arenaTagFor($value);
 
-            // A string, array or object result travels by arena address, and the arena is #7. The
-            // worker reports the *shape* it produced — a tag, never the value — and the waiting
-            // process turns that tag into a message naming the ticket.
             return $arenaTag !== null
                 ? new ControlRecord(Opcode::PANIC, $slotId, TaggedRecord::address($arenaTag, 0))
                 : new ControlRecord(Opcode::RESULT, $slotId, ValueCodec::toRecord($value));
         } catch (\Throwable) {
-            // A PANIC carrying NIL means "the task threw". The class, message and trace live in the
-            // arena's shared error-info object once #7 lands; they are never serialized onto this
-            // socket, which is why nothing about the throwable travels here today.
             return new ControlRecord(Opcode::PANIC, $slotId, TaggedRecord::nil());
         }
     }
