@@ -349,3 +349,25 @@ Scopes in use: `scheduler`, `channels`, `select`, `sync`, `context`, `poller`, `
 `parallel`, `contracts`, `tests`, `tools`, `spikes`, `ci`, `docs`.
 
 Code style is PER-CS2.0, applied by php-cs-fixer. Run `composer cs:fix` rather than hand-formatting.
+
+## Breaking changes are allowed — prefer the correct shape
+
+This package and `lisachenko/php-shared-data-extension` ride development lines and have **no
+external consumers**. Backwards compatibility is therefore not a constraint on either of them:
+rename a method, narrow an interface, change a record layout, resize an id — whatever makes the
+design right. Do not carry a deprecation cycle, do not keep a wrong method alive because something
+might implement it, and do not invent an adapter to avoid touching a published shape. `LAYOUT_VERSION`
+already exists to hard-fail a mismatched reader, which is the only compatibility mechanism this
+family needs while it is being built.
+
+Two things this does **not** license.
+
+**`lisachenko/z-engine` is different.** It has consumers of its own, so a change there gets the
+ordinary care — and, as ever, the fix for a missing capability is a named public method upstream
+rather than a reach-through from here.
+
+**None of this applies to the invariants.** The Never-Serialize Rule, fork-only sharing, the prefork
+ordering, the `arData` law, the publication order, lock discipline, `EOWNERDEAD` handling and the
+preemption obligations are not API contracts — they are the conditions under which this code is
+correct at all. "Breaking changes are allowed" means the *shape* is negotiable. The rules above it in
+this file are not.
