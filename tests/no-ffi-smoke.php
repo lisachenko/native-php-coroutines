@@ -20,17 +20,21 @@
  * runtime, so the engine-level tests have no other way to get it), which means a .phpt child would
  * re-enable FFI and quietly defeat this check. Hence a plain script.
  *
- * As the cooperative runtime lands, this script grows into an actual run: spawn a few coroutines,
- * pass values over a channel, select, sleep, and assert the results — all with FFI switched off.
+ * It is an actual run, not a load test of the contracts: coroutines are spawned, the scheduler
+ * round-robins them, a sleep parks on the timer heap, and a value crosses a socket pair through
+ * `Io::awaitReadable()` — all with FFI switched off.
  */
 declare(strict_types=1);
 
+use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\CoroutineStatus;
+use Lisachenko\NativePhpCoroutines\Io;
 use Lisachenko\NativePhpCoroutines\Exception\NotShareableValueException;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\ControlRecord;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\Opcode;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\Tag;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
+use Lisachenko\NativePhpCoroutines\Runtime;
 use Lisachenko\NativePhpCoroutines\SelectToken;
 use Lisachenko\NativePhpCoroutines\SuspendCommand;
 
@@ -79,6 +83,67 @@ check(
     str_contains(NotShareableValueException::forArray()->getMessage(), 'SharedArray'),
     $failures,
 );
+
+// ---------------------------------------------------------------------------------------------
+// An actual cooperative run, with ffi.enable=0: scheduler, timers and the poller.
+// ---------------------------------------------------------------------------------------------
+
+$turns    = [];
+$received = null;
+$slept    = 0.0;
+
+[$writeEnd, $readEnd] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($readEnd, false);
+
+$runtime = new Runtime();
+
+$runtime->run(function () use (&$turns, &$received, &$slept, $writeEnd, $readEnd): void {
+    foreach (['A', 'B'] as $name) {
+        Coroutine::spawn(function () use ($name, &$turns): void {
+            foreach ([1, 2] as $round) {
+                $turns[] = $name . $round;
+                Coroutine::yield();
+            }
+        });
+    }
+
+    // Nothing is on this socket yet, so the reader parks on the poller and the process idles in
+    // stream_select() until the writer below hands it something.
+    Coroutine::spawn(function () use ($readEnd, &$received): void {
+        Io::awaitReadable($readEnd);
+        $received = fread($readEnd, 5);
+    });
+
+    Coroutine::spawn(function () use ($writeEnd): void {
+        Coroutine::sleep(0.02);
+        fwrite($writeEnd, 'hello');
+    });
+
+    $before = hrtime(true);
+    Coroutine::sleep(0.05);
+    $slept  = (hrtime(true) - $before) / 1_000_000_000;
+});
+
+fclose($writeEnd);
+fclose($readEnd);
+
+check('coroutines round-robin fairly', $turns === ['A1', 'B1', 'A2', 'B2'], $failures);
+check('a value crossed a socket through the poller', $received === 'hello', $failures);
+check('sleeping waited out its deadline', $slept >= 0.05, $failures);
+
+// Go semantics: the run ends with main, and a second runtime is perfectly usable afterwards.
+$discarded = 'not touched';
+
+(new Runtime())->run(function () use (&$discarded): void {
+    Coroutine::spawn(function () use (&$discarded): void {
+        Coroutine::sleep(10.0);
+        $discarded = 'the straggler ran';
+    });
+
+    Coroutine::yield();
+});
+
+check('pending coroutines are discarded when main returns', $discarded === 'not touched', $failures);
 
 if ($failures !== []) {
     fwrite(STDERR, "FAIL: Layer 1 smoke checks failed without FFI:\n  - " . implode("\n  - ", $failures) . "\n");
