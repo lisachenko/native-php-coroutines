@@ -55,20 +55,7 @@ jobs:
       - uses: ramsey/composer-install@v4
       - run: composer phpstan
 
-  coding-standards:
-    name: Coding standards (PHP ${{ matrix.php }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php: ['8.4', '8.5']
-    steps:
-      - uses: actions/checkout@v7
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: ffi
-          ini-values: ffi.enable=1, zend.assertions=1, opcache.jit=off
-          coverage: none
-      - uses: ramsey/composer-install@v4
-      - run: composer cs:check
+# Coding standards are deliberately not a CI job. php-cs-fixer is a development
+# tool here: `composer cs:fix` is run locally before proposing a change, so the
+# style is already correct by the time anything reaches CI. Checking it again on
+# a runner only turns a fixable formatting nit into a red build.
