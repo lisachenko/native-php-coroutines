@@ -20,21 +20,28 @@
  * runtime, so the engine-level tests have no other way to get it), which means a .phpt child would
  * re-enable FFI and quietly defeat this check. Hence a plain script.
  *
- * As the cooperative runtime lands, this script grows into an actual run: spawn a few coroutines,
- * pass values over a channel, select, sleep, and assert the results — all with FFI switched off.
+ * As the cooperative runtime lands, this script grows into an actual run. It already spawns
+ * coroutines, passes values over a channel, selects and waits on a group; sleeping joins that list
+ * once the timer heap exists, and the scheduler double at the bottom gives way to the real one.
  */
 declare(strict_types=1);
 
+use Lisachenko\NativePhpCoroutines\Channel;
+use Lisachenko\NativePhpCoroutines\Context;
 use Lisachenko\NativePhpCoroutines\CoroutineStatus;
 use Lisachenko\NativePhpCoroutines\Exception\NotShareableValueException;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\ControlRecord;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\Opcode;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\Tag;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
+use Lisachenko\NativePhpCoroutines\Select;
 use Lisachenko\NativePhpCoroutines\SelectToken;
 use Lisachenko\NativePhpCoroutines\SuspendCommand;
+use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
+use Lisachenko\NativePhpCoroutines\Tests\Support\FakeScheduler;
 
 require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/Support/bootstrap.php';
 
 $failures = [];
 
@@ -79,6 +86,64 @@ check(
     str_contains(NotShareableValueException::forArray()->getMessage(), 'SharedArray'),
     $failures,
 );
+
+// An actual run, not just the contracts: coroutines handing values over a channel, a select, a
+// context and a WaitGroup, all on native Fiber with FFI switched off. The scheduler here is the
+// test double from tests/Support — the real one arrives with the rest of the runtime.
+$scheduler = new FakeScheduler();
+$jobs      = new Channel($scheduler, 2);
+$idle      = new Channel($scheduler);
+$request   = Context::withCancel($scheduler);
+$group     = new WaitGroup($scheduler);
+
+$consumed  = [];
+$polled    = null;
+$cancelled = null;
+$finished  = false;
+
+$group->add();
+
+$scheduler->spawn(function () use ($jobs, $group, &$consumed): void {
+    foreach ($jobs as $job) {
+        $consumed[] = $job;
+    }
+
+    $group->done();
+});
+
+$scheduler->spawn(function () use ($scheduler, $jobs, $idle, $request, &$polled, &$cancelled): void {
+    $jobs->send('alpha');
+    $jobs->send('beta');
+
+    // Nothing is ready on a rendezvous that nobody is holding, so the default is what a select
+    // takes rather than parking.
+    $polled = Select::on($scheduler)
+        ->recv($idle, static fn (): string => 'a value arrived')
+        ->default(static fn (): string => 'nothing was ready')
+        ->run();
+
+    $request->cancel();
+
+    // Cancellation is a channel that closed, which makes it selectable like anything else.
+    $cancelled = Select::on($scheduler)
+        ->recv($request->done(), static fn (mixed $value, bool $ok): string => $ok ? 'a value' : 'cancelled')
+        ->default(static fn (): string => 'not cancelled')
+        ->run();
+
+    $jobs->close();
+});
+
+$scheduler->spawn(function () use ($group, &$finished): void {
+    $group->wait();
+    $finished = true;
+});
+
+$scheduler->loop();
+
+check('coroutines pass values over a channel', $consumed === ['alpha', 'beta'], $failures);
+check('a select takes its default when nothing is ready', $polled === 'nothing was ready', $failures);
+check('a cancelled context is selectable', $cancelled === 'cancelled', $failures);
+check('a WaitGroup releases its waiter once the work is done', $finished, $failures);
 
 if ($failures !== []) {
     fwrite(STDERR, "FAIL: Layer 1 smoke checks failed without FFI:\n  - " . implode("\n  - ", $failures) . "\n");
