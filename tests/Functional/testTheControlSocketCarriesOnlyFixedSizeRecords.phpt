@@ -1,5 +1,5 @@
 --TEST--
-A real worker answers over the raw socket in whole 32-byte records and nothing else
+A real worker answers over the raw socket in whole 16-byte records and nothing else
 --INI--
 ffi.enable=1
 opcache.jit=off
@@ -107,8 +107,8 @@ echo 'worker exited cleanly: ', pcntl_wifexited($status) && pcntl_wexitstatus($s
 echo 'children left: ', parallelChildrenLeft(), "\n";
 ?>
 --EXPECT--
-bytes sent for 3 spawns: 96
-bytes received for 3 results: 96
+bytes sent for 3 spawns: 48
+bytes received for 3 results: 48
 a whole number of records: yes
 records: 3
   RESULT slot #7 tag INT payload 5

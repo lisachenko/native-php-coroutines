@@ -1,5 +1,5 @@
 --TEST--
-A control record is exactly 32 bytes and carries opcode, slot id and one tagged value
+A control record is exactly 16 bytes and carries opcode, tag, id and address
 --INI--
 ffi.enable=1
 opcache.jit=off
@@ -32,16 +32,16 @@ echo 'address: 0x', strtoupper(dechex($decoded->value?->arenaAddress() ?? 0)), P
 echo 'framing: ', strlen($bytes) === ControlRecord::SIZE ? 'fixed' : 'VARIABLE', PHP_EOL;
 
 try {
-    ControlRecord::decode(substr($bytes, 0, 31));
+    ControlRecord::decode(substr($bytes, 0, 15));
 } catch (LengthException $e) {
     echo 'short read rejected: ', $e->getMessage(), PHP_EOL;
 }
 ?>
 --EXPECT--
-size: 32
+size: 16
 opcode: SPAWN
 slot: 3
 tag: OBJ
 address: 0x7F00DEADB000
 framing: fixed
-short read rejected: A control record is exactly 32 bytes, got 31
+short read rejected: A control record is exactly 16 bytes, got 15
