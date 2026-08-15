@@ -31,6 +31,11 @@ $runtime = new Runtime(preemptive: true);
 $runtime->run(static function (RuntimeInterface $self) use ($state): void {
     $silence = new Channel($self->scheduler());
 
+    // Kept so the assertion below can look at the channel itself once the run is over. Whether
+    // the coroutine really parked is only observable from the channel's own wait queue: a flag
+    // set by the coroutine can only prove it reached the line *before* parking.
+    $state->channel = $silence;
+
     Coroutine::spawn(static function () use ($state, $silence): void {
         $sum = 0;
 
@@ -43,7 +48,7 @@ $runtime->run(static function (RuntimeInterface $self) use ($state): void {
         // Nobody ever sends here. The drain resumes this coroutine out of the preemption
         // callback, it parks itself on the channel, and from there it is ordinary debris that
         // main returning is entitled to drop.
-        $silence->receive();
+        $silence->recv();
 
         $state->finished = true;
     });
@@ -53,7 +58,8 @@ $runtime->run(static function (RuntimeInterface $self) use ($state): void {
 
 echo 'the loop was preempted: ',
     ($runtime->preemptor()?->preemptions() ?? 0) >= 1 ? 'yes' : 'no', PHP_EOL;
-echo 'it was drained far enough to park itself: ', $state->parked ? 'yes' : 'no', PHP_EOL;
+echo 'it was drained far enough to park itself: ',
+    $state->parked && $state->channel->pendingReceivers() === 1 ? 'yes' : 'no', PHP_EOL;
 echo 'it was then discarded rather than resumed: ', $state->finished ? 'no' : 'yes', PHP_EOL;
 ?>
 --EXPECT--
