@@ -42,6 +42,7 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   engine hooks depend on.
 - `lisachenko/z-engine`, resolved per PHP minor (`8.4.x-dev` on 8.4, `8.5.x-dev` on 8.5) — engine
   structures are read by byte offset, so the line must match the running minor.
+- `ext-pcntl`, for preemption only: the slice timer is delivered as `SIGALRM`.
 
 ## Limits worth knowing up front
 
@@ -51,6 +52,14 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   anything else throws `NotShareableValueException` naming the remedy.
 - **The JIT must be off** wherever the engine hooks are used — it rewrites the executor internals
   those hooks depend on.
+- **The 10 ms slice is a target, not a bound.** Preemption happens between opcodes, so a single
+  long-running one is not interruptible: `sort()` over four million integers defers a preemption by
+  around two seconds. Every *loop* shape is interrupted promptly, including an empty
+  `while (true) {}`, so no program can starve the scheduler — but do not size a latency SLO on the
+  slice.
+- **Preemption is opt-in** (`new Runtime(preemptive: true)`) and, once armed, makes coroutine
+  lifetimes the scheduler's business: a preempted coroutine is suspended inside an engine callback,
+  so it is drained rather than discarded when a run ends.
 
 ## License
 
