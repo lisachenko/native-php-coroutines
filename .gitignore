@@ -4,3 +4,6 @@ composer.lock
 /vendor/
 /.phpunit.cache/
 /.php-cs-fixer.cache
+/composer-local.json
+/composer-local.lock
+/.claude/worktrees/

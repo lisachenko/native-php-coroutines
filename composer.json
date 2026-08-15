@@ -1,0 +1,49 @@
+{
+    "name": "lisachenko/native-php-coroutines",
+    "description": "Go-style coroutines for PHP: concurrency on native Fiber, parallelism on shared objects, zero serialization",
+    "type": "library",
+    "keywords": ["coroutines", "goroutine", "fiber", "channel", "select", "concurrency", "parallel", "ffi", "z-engine"],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Alexander Lisachenko",
+            "email": "lisachenko.it@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "ext-ffi": "*",
+        "lisachenko/z-engine": "8.4.x-dev || 8.5.x-dev"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^12.5"
+    },
+    "suggest": {
+        "ext-pcntl": "Required for parallel workers (fork, signal handling) and for preemption",
+        "ext-posix": "Required for worker supervision"
+    },
+    "autoload": {
+        "psr-4": {
+            "Lisachenko\\NativePhpCoroutines\\": "src/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "phpstan": "phpstan analyse",
+        "cs:check": "php-cs-fixer fix --dry-run --diff",
+        "cs:fix": "php-cs-fixer fix"
+    },
+    "scripts-descriptions": {
+        "test": "Run the test suite",
+        "phpstan": "Run static analysis at the maximum level",
+        "cs:check": "Check coding standards without fixing",
+        "cs:fix": "Fix coding standards"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

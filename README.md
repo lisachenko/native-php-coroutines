@@ -27,17 +27,19 @@ fork-shared `mmap` arena and travel as addresses.
 
 | Layer | What it gives you | FFI |
 | --- | --- | --- |
-| **1 — cooperative runtime** | scheduler, channels, `select`, timers, IO parking, deadlock detection | **none** |
-| **2 — preemption** | ~10 ms time slices, so a call-free loop cannot starve its peers | opt-in |
-| **P — parallelism** | prefork workers, shared objects, shared channels, result slots | required |
+| **1 — cooperative runtime** | scheduler, channels, `select`, timers, IO parking, deadlock detection | **no FFI calls** |
+| **2 — preemption** | ~10 ms time slices, so a call-free loop cannot starve its peers | z-engine `InterruptHook` |
+| **P — parallelism** | prefork workers, shared objects, shared channels, result slots | arena + engine hooks |
 
-**Layer 1 uses no FFI at all** and runs on a stock PHP build. FFI becomes a hard requirement only
-when you ask for `workers > 0`.
+**Layer 1 makes no FFI calls** — no z-engine, no engine hooks, just `Fiber` and `stream_select()`.
+That is a property of the design, not of the installation: `ext-ffi` is required regardless, because
+z-engine requires it, and z-engine is a hard dependency of this package.
 
 ## Requirements
 
 - PHP **8.4** or **8.5**, NTS.
-- For `workers > 0`: `ext-ffi` with `ffi.enable=1`, and `opcache.jit=off`.
+- `ext-ffi` with `ffi.enable=1`, and `opcache.jit=off` — the JIT rewrites the executor internals the
+  engine hooks depend on.
 - `lisachenko/z-engine`, resolved per PHP minor (`8.4.x-dev` on 8.4, `8.5.x-dev` on 8.5) — engine
   structures are read by byte offset, so the line must match the running minor.
 
