@@ -1,5 +1,5 @@
 --TEST--
-The runtime refuses the parallel and preemptive surface with a message naming the ticket that ships it
+The runtime refuses the parallel surface with a message naming the ticket that ships it
 --INI--
 ffi.enable=1
 opcache.jit=off
@@ -17,12 +17,6 @@ include __DIR__ . '/../../vendor/autoload.php';
 
 try {
     new Runtime(workers: 4);
-} catch (LogicException $refusal) {
-    echo $refusal->getMessage(), PHP_EOL;
-}
-
-try {
-    new Runtime(preemptive: true);
 } catch (LogicException $refusal) {
     echo $refusal->getMessage(), PHP_EOL;
 }
@@ -56,7 +50,6 @@ $runtime->run(static function (RuntimeInterface $self): void {
 ?>
 --EXPECT--
 parallel workers are not implemented yet (see #7); construct the runtime with workers: 0 instead of 4
-preemptive scheduling is not implemented yet (see #5); construct the runtime with preemptive: false
 shared roots are not implemented yet (see #7)
 shared roots are not implemented yet (see #7)
 persisting objects into the shared arena is not implemented yet (see #7)
