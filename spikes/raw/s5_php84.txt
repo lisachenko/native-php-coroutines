@@ -1,0 +1,22 @@
+PHP 8.4.19 | pid 16558
+5a fiber start() returned 'PREEMPT'; preempt-suspended=yes
+5a Fiber::throw() outcome: throw() returned normally (returned NULL)
+5a hook swallowed: DomainException: cancel-me
+5a after throw: terminated=true suspended=false running=false
+5a final: drainSteps=0 return='COMPLETED-NORMALLY' fiberSawException=NULL finallyRan=true
+5a => cancellation SILENTLY LOST: the exception surfaced inside the scheduler FFI callback, was swallowed by its mandatory try/catch, and the coroutine ran to completion as if nothing happened
+
+5b unguarded-hook subprocess: exit=255 (PHP FATAL ERROR)
+     | UNSAFE-CHILD: preempt-suspended, now calling Fiber::throw()
+     | PHP Warning:  Uncaught DomainException: cancel in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s5_fiber_throw_hazard.php:114
+     | Stack trace:
+     | #0 {main}
+     |   thrown in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s5_fiber_throw_hazard.php on line 114
+     | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze84/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+
+5c cooperative: start()='COOPERATIVE-YIELD' | throw outcome: throw() returned normally
+5c cooperative: return='CANCELLED-IN-FIBER' fiberSaw='DomainException: cancel-me @ line 277' finallyRan=true
+5c => CORRECT: the exception surfaced exactly at the explicit Fiber::suspend() call in user code, the user catch ran, finally ran
+
+VERDICT S5: GREEN — hazard established. Fiber::throw() into a PREEMPT-suspended fiber does NOT cancel the coroutine: the fiber's resume point is inside the scheduler's own FFI interrupt callback, so the exception surfaces there, not in user code. With the mandatory try/catch it is silently swallowed (observed; the coroutine ran to completion, user catch never ran, finally ran only at normal exit); without it, it escapes the FFI callback and the process dies with "PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze84/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84" (subprocess exit 255). By contrast, throwing into a fiber suspended at an explicit Fiber::suspend() surfaces exactly at that call (DomainException: cancel-me @ line 277), runs the user catch and the finally. RULE: the scheduler may only ever resume(null) a preempt-suspended fiber; cancellation must be a flag consumed at a cooperative safe point.
+exit=0

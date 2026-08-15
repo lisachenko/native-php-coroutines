@@ -1,0 +1,45 @@
+PHP 8.5.9 | pid 26716 | cycles=10000
+6a-0 one abandoned suspended fiber: destructorsRun=1 finallyRan=1
+6a progression:
+  after  2000: mem=471480 mem(true)=2097152 rss=35545088 dtors=2000
+  after  4000: mem=472016 mem(true)=2097152 rss=35545088 dtors=4000
+  after  6000: mem=472336 mem(true)=2097152 rss=35545088 dtors=6000
+  after  8000: mem=472816 mem(true)=2097152 rss=35545088 dtors=8000
+  after 10000: mem=473136 mem(true)=2097152 rss=35545088 dtors=10000
+6a cycles=10000 bodiesEntered=10000 destructorsRun=10000 finallyRan=10000
+6a memory_get_usage():     470984 -> 473456  (+2472 B total, +0.25 B/fiber)
+6a memory_get_usage(true): 2097152 -> 2097152  (+0 B total, +0.00 B/fiber)
+6a RSS:                    35323904 -> 35545088  (+221184 B total, +22.12 B/fiber)
+
+--preempt-destroy subprocess: exit=255 (PHP FATAL ERROR)
+     | CHILD(--preempt-destroy): fiber is preempt-suspended (suspended=true)
+     | CHILD(--preempt-destroy): dropping the only reference NOW
+     | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+
+--preempt-shutdown subprocess: exit=255 (PHP FATAL ERROR)
+     | CHILD(--preempt-shutdown): fiber is preempt-suspended (suspended=true)
+     | CHILD(--preempt-shutdown): keeping the reference and ending the script
+     | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+
+--preempt-drain subprocess: exit=0 (survived)
+     | CHILD(--preempt-drain): cycles=400 preemptions=1719 dtors=400 finallys=400
+     | CHILD(--preempt-drain): mem(true) 4194304 -> 4194304 (+0.0 B/fiber) | RSS 40599552 -> 40816640 (+571.3 B/fiber)
+     | CHILD(--preempt-drain): SURVIVED
+
+--preempt-destroy-after-uninstall subprocess: exit=255 (PHP FATAL ERROR)
+     | CHILD(--preempt-destroy-after-uninstall): hook uninstalled, dropping the fiber NOW
+     | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+
+--preempt-shutdown-drain subprocess: exit=0 (survived)
+     | CHILD(--preempt-shutdown-drain): preempt-suspended; registering a shutdown drain
+     | CHILD(--preempt-shutdown-drain): ending the script
+     | CHILD(--preempt-shutdown-drain): drained in 1 resume(s); terminated=true dtors=1 finallys=1
+
+summary 6a  cooperative abandon: dtors=10000/10000, finally DOES run when a cooperatively-suspended fiber is abandoned (10000 of 10000), leak +0.00 B/fiber (real) +22.12 B/fiber (RSS)
+summary 6b  destroy a preempt-suspended fiber: PHP FATAL ERROR
+summary 6c  preempt-suspended fiber alive at request shutdown: PHP FATAL ERROR
+summary 6d  drain (resume(null) to termination) before dropping: survived
+summary 6e  workaround A — uninstall the hook first, then drop: PHP FATAL ERROR
+summary 6f  workaround B — drain from register_shutdown_function(): survived
+VERDICT S6: GREEN — memory is fine, but a HARD SHUTDOWN OBLIGATION was found. (1) Cooperatively-suspended fibers that are abandoned ARE collected: over 10000 cycles all 10000 fiber-local destructors ran, finally ran 10000 times, memory_get_usage(true) +0.00 B/fiber, RSS +22.12 B/fiber (one-time step, then flat) — no drain needed for memory. (2) But a PREEMPT-suspended fiber must NEVER be destroyed while suspended: dropping its last reference is PHP FATAL ERROR and leaving one alive at request shutdown is PHP FATAL ERROR — in both cases with "PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84". The engine unwinds a dying fiber from its suspension point, which for a preempted fiber is inside the FFI interrupt callback, and that unwind is not a \Throwable so the mandatory try/catch cannot stop it. (3) The disciplined path works: resuming every preempted fiber with resume(null) until isTerminated() before dropping it survived. (4) Workarounds: uninstalling the interrupt hook before dropping the fiber => PHP FATAL ERROR (the suspended fiber's saved stack still holds the ext-ffi trampoline frame); draining from register_shutdown_function() => survived. THE SCHEDULER MUST THEREFORE OWN AND DRAIN EVERY PREEMPTED COROUTINE — this is a correctness obligation, not a memory optimisation.
+exit=0

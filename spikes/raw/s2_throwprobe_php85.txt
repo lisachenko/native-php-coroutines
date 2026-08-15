@@ -1,0 +1,8 @@
+PHP Warning:  Uncaught RuntimeException: escaping the FFI callback on purpose in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php:67
+Stack trace:
+#0 /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/ze85/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php(64): {closure:/tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php:66}()
+#1 /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php(71): ZEngine\System\Hook\InterruptHook->handle()
+#2 {main}
+  thrown in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php on line 67
+PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/712e9d9e-de2d-5090-979a-78848e49e49b/scratchpad/spikes/s2_interrupt_hook.php on line 71
+exit=255

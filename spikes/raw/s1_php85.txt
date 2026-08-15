@@ -1,0 +1,17 @@
+PHP 8.5.9 | pid 7091 | ticks every 10000 us | 200000000 iterations
+phase0 reference: value=599999994 in 4.444 s
+phase1 fiber-less alarms: handlerEntries=49 outsideFiber=49 (survived=yes)
+phase2 work: 3.756 s (reference 4.444 s, overhead -15.5%)
+phase2 preemptions=0 badResumeValues=0
+phase2 scheduler-visit interval ms: mean=0.000 p50=0.000 p99=0.000 max=0.000
+phase2 handler: entries=420 suspendCalls=371 outsideFiber(total)=49 outsideFiber(during work)=0
+phase2 suspendErrors=371 first=FiberError: Cannot switch fibers in current execution context
+phase2 result=599999994 reference=599999994 stateIntact=YES
+
+-- phase3 diagnostics --
+  3a suspend inside array_map callback           : OK (suspended, value delivered)
+  3a resume                                      : terminated, return=completed
+  3b suspend via explicit pcntl_signal_dispatch() : DID NOT SUSPEND (fiber returned NULL, suspendErrors +1: FiberError: Cannot switch fibers in current execution context)
+  3c flag+cooperative-checkpoint fallback        : preemptions=197 in 1.993 s, result CORRECT, slice ms mean=10.085 p99=13.234 max=13.312, signals=315
+
+VERDICT S1: RED — Fiber::suspend() from handler raised FiberError: Cannot switch fibers in current execution context (371x); zero preemptions observed

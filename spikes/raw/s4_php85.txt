@@ -1,0 +1,21 @@
+PHP 8.5.9 | pid 14039 | slice 10000 us
+
+-- loop shapes (excess latency = handler timestamp - arm timestamp - 10 ms) --
+  (a) integer arithmetic             ran  1.380 s, samples= 137 | excess-latency us: mean=    46.0 p50=    43.2 p99=     71.4 max=     194.9 (worst at sample #74 of 137)
+  (b) string concatenation           ran  0.701 s, samples=  54 | excess-latency us: mean=  2943.3 p50=    50.3 p99=  38178.0 max=   95258.2 (worst at sample #41 of 54)
+  (b2) freeing that 20 MB string     ran  0.001 s, samples=   0 | excess-latency us: mean=     0.0 p50=     0.0 p99=      0.0 max=       0.0 (worst at sample #-1 of 0)
+  (c) array append                   ran  0.803 s, samples=  13 | excess-latency us: mean= 51254.0 p50=    74.0 p99= 186036.5 max=  448506.5 (worst at sample #9 of 13)
+  (c2) freeing that 6M-element array ran  0.013 s, samples=   1 | excess-latency us: mean=  2765.7 p50=  2765.7 p99=   2765.7 max=    2765.7 (worst at sample #0 of 1)
+  (d) loop with a function call      ran  0.373 s, samples=  37 | excess-latency us: mean=    44.3 p50=    40.4 p99=     71.1 max=      88.7 (worst at sample #1 of 37)
+  (e) empty while(true) {}           ran  1.507 s, samples= 150 | excess-latency us: mean=    43.2 p50=    41.5 p99=     70.3 max=     101.9  [escaped=yes]
+
+-- single long-running opcodes (NOT interruptible; documents the hard bound) --
+  (f1) sort() over 4M ints           body  1.633 s | interrupt observed  1622944.3 us LATE (1622.9 ms past the 10 ms slice)
+  (f2) str_repeat("a", 400M)         body  1.201 s | interrupt observed  1177696.4 us LATE (1177.7 ms past the 10 ms slice)
+
+summary C1 (unbounded?): NO loop shape is unbounded
+summary C2 (<5 ms?):     non-allocating shapes worst = 194.9 us; over-budget shapes: (b) string concatenation max=95258.2 us (95.3 ms), (c) array append max=448506.5 us (448.5 ms)
+summary single-opcode bound: sort()=1622.9 ms, str_repeat()=1177.7 ms
+summary teardown: free-20MB-string samples=0 max=0.0 ms | free-6M-array samples=1 max=2.8 ms
+VERDICT S4: GREEN — no loop shape is unbounded: an empty while(true){} is interrupted just as promptly as any other loop, so ZEND_JMP does carry an interrupt check and a preemption timer can always regain control. Non-allocating loops (arithmetic, function calls, empty loop) observe the interrupt within 194.9 us (0.195 ms). CAVEAT — the slice is NOT tight for allocation-heavy code: over-budget shapes (b) string concatenation max=95258.2 us (95.3 ms), (c) array append max=448506.5 us (448.5 ms), and a single long-running internal opcode is entirely non-interruptible (sort() over 4M ints = 1622.9 ms, str_repeat 400 MB = 1177.7 ms). The achievable slice is therefore bounded below by the longest single opcode, not by the timer.
+exit=0
