@@ -45,6 +45,11 @@ final class PreforkTaskDirectory implements TaskDirectory
     /**
      * Task => address, so registering the same task twice is idempotent.
      *
+     * `@local-identity`: an `SplObjectStorage` is keyed by the object-store handle, which is a
+     * legitimate identity for these tasks precisely because they never enter the arena — they reach
+     * the workers through fork inheritance. A *shared* object may never be kept this way: forked
+     * children inherit one free list and are handed identical handles for different objects.
+     *
      * @var \SplObjectStorage<Task, int>
      */
     private readonly \SplObjectStorage $addresses;
@@ -58,6 +63,7 @@ final class PreforkTaskDirectory implements TaskDirectory
 
     public function __construct()
     {
+        // @local-identity — see $addresses: these tasks never enter the arena.
         /** @var \SplObjectStorage<Task, int> $addresses */
         $addresses       = new \SplObjectStorage();
         $this->addresses = $addresses;

@@ -63,6 +63,13 @@ final class WorkerSupervisor
     /** @var list<WorkerCrashedException> */
     private array $crashes = [];
 
+    /**
+     * Slot id => the arena address of the task dispatched under it, while it is still in flight.
+     *
+     * @var array<int, int>
+     */
+    private array $dispatched = [];
+
     private readonly SlotTable $slots;
 
     private int $cursor = 0;
@@ -76,20 +83,31 @@ final class WorkerSupervisor
     public function __construct(
         private readonly SchedulerInterface $scheduler,
         private readonly TaskDirectory $tasks = new PreforkTaskDirectory(),
+        private readonly ?SharedArena $arena = null,
+        ?SlotTable $slots = null,
     ) {
-        $this->slots = new SlotTable($scheduler);
+        // The table is shared with the runtime that owns it, because a process without a pool — a
+        // worker — still has to be able to read and await slots the family allocated.
+        $this->slots = $slots ?? new SlotTable($scheduler, $arena);
     }
 
     /**
      * Fork $count workers, right now.
      *
      * @param int                        $count     Workers to fork; at least one.
-     * @param (\Closure(int): void)|null $afterFork Runs in each child straight after the fork. This
+     * @param (\Closure(int): void)|null $afterFork Runs in each child straight after the fork,
+     *                                              **before any scheduler or fiber exists**. This
      *                                              is where a preemptive runtime re-arms the child's
-     *                                              interval timer (SEAM, #5) — `setitimer` intervals
-     *                                              are not inherited across `fork()`.
+     *                                              interval timer (#5) — `setitimer` intervals are
+     *                                              not inherited across `fork()`.
+     * @param (\Closure(int, SchedulerInterface): void)|null $afterScheduler Runs in each child once
+     *                                              its own scheduler exists and before the first
+     *                                              coroutine is spawned on it. This is where a
+     *                                              preemptive runtime binds a `Preemptor` to *that*
+     *                                              scheduler; binding the parent's instead leaves
+     *                                              the child silently unpreemptable.
      */
-    public function start(int $count, ?\Closure $afterFork = null): void
+    public function start(int $count, ?\Closure $afterFork = null, ?\Closure $afterScheduler = null): void
     {
         if ($this->started) {
             throw new \LogicException('the worker pool has already been forked; start() is once per pool');
@@ -100,12 +118,15 @@ final class WorkerSupervisor
         }
 
         // ---------------------------------------------------------------------------------
-        // STEP 1 — SEAM (#7): the shared arena and every declared shared root are created here,
-        // BEFORE the fork. Children inherit them by address, which is what makes a pointer written
-        // by one process meaningful in another. Anything created after the fork is private to
-        // whichever process created it, so a root declared late is not a late binding — it is a
-        // root the workers cannot see.
+        // STEP 1 — the shared arena, the wake registry and every declared shared root exist by now:
+        // the runtime builds them in its constructor, BEFORE this call. Children inherit them by
+        // address, which is what makes a pointer written by one process meaningful in another.
+        // Sealing the arena here closes registration: anything declared after this moment would be
+        // private to whichever process declared it, so it is refused rather than half-created.
         // ---------------------------------------------------------------------------------
+
+        $this->arena?->watchWith($this->scheduler);
+        $this->arena?->sealBeforeFork();
 
         $this->ownerPid = posix_getpid();
         $this->installSignalHandling();
@@ -118,7 +139,7 @@ final class WorkerSupervisor
 
         // STEP 2 — fork.
         for ($id = 0; $id < $count; ++$id) {
-            $worker = ProcessWorker::fork($id, $this->tasks, $afterFork);
+            $worker = ProcessWorker::fork($id, $this->tasks, $afterFork, $afterScheduler, $this->arena);
 
             $this->workers[$id] = $worker;
         }
@@ -196,13 +217,14 @@ final class WorkerSupervisor
 
         $target = $this->place($worker);
 
-        // SEAM (#7): with the arena, this is where the task's object graph is persisted into shared
-        // memory and the address that comes back is a real pointer. Until then the directory
-        // resolves tasks published before the fork. Either way the task itself never travels — only
-        // this integer does.
+        // With an arena this persists the task's object graph into shared memory and hands back a
+        // real pointer; without one it resolves a task published before the fork. Either way the
+        // task itself never travels — only this integer does.
         $address = $this->tasks->addressOf($task);
 
         $slot = $this->slots->open($target->id());
+
+        $this->dispatched[$slot->id] = $address;
 
         try {
             $target->dispatch($slot->id, $address);
@@ -319,13 +341,23 @@ final class WorkerSupervisor
 
     private function apply(ProcessWorker $worker, ControlRecord $record): void
     {
-        if ($record->opcode === Opcode::RESULT) {
-            $this->slots->completeWithValue($record->slotId, $record->value ?? TaggedRecord::nil());
+        if ($record->opcode === Opcode::RESULT || $record->opcode === Opcode::PANIC) {
+            // With an arena the record is pure signalling: the answer — a value or the address of a
+            // shared error-info object — is already in the slot, and reading it from there is what
+            // makes it a real PHP value rather than something rebuilt from bytes on a socket.
+            if ($this->arena !== null) {
+                $this->slots->refresh();
+                $this->releaseTask($record->slotId);
 
-            return;
-        }
+                return;
+            }
 
-        if ($record->opcode === Opcode::PANIC) {
+            if ($record->opcode === Opcode::RESULT) {
+                $this->slots->completeWithValue($record->slotId, $record->value ?? TaggedRecord::nil());
+
+                return;
+            }
+
             $this->slots->completeWithError(
                 $record->slotId,
                 self::panicFor($worker->id(), $record->value->tag ?? Tag::NIL),
@@ -334,8 +366,25 @@ final class WorkerSupervisor
             return;
         }
 
-        // SPAWN and SHUTDOWN travel the other way; WAKE and CLOSE belong to cross-process channels
-        // and have nothing to act on yet. None of them is worth taking the parent down over.
+        // SPAWN and SHUTDOWN travel the other way; a WAKE or CLOSE that arrives here is a re-check
+        // poke the arena's own wake socket already delivered. None is worth taking the parent down
+        // over.
+    }
+
+    /** Let the directory reuse a class key once the task under it has finished. */
+    private function releaseTask(int $slotId): void
+    {
+        $address = $this->dispatched[$slotId] ?? null;
+
+        if ($address === null) {
+            return;
+        }
+
+        unset($this->dispatched[$slotId]);
+
+        if ($this->tasks instanceof ArenaTaskDirectory) {
+            $this->tasks->releaseInFlight($address);
+        }
     }
 
     /**
@@ -384,6 +433,13 @@ final class WorkerSupervisor
         $worker->closeControl();
         $worker->waitForExit(self::BURY_REAP_SECONDS);
 
+        // A worker killed *after* settling a slot still left a real answer behind, so shared memory
+        // is read once more before anything is declared lost. What is genuinely unsettled becomes
+        // the crash; a slot whose lock had to be recovered from the dead owner is never read as if
+        // it were an answer, because refresh() only ever consumes a slot the substrate reports as
+        // settled under that same lock.
+        $this->slots->refresh();
+
         $pending = $this->slots->pendingSlotsOf($worker->id());
 
         // An orderly exit is one that was asked for *and* left nothing owed. A worker that was asked
@@ -392,7 +448,14 @@ final class WorkerSupervisor
             return;
         }
 
-        $crash = $worker->crashException($pending);
+        $crash = $this->arena?->lockRecovered() === true
+            ? new WorkerCrashedException(
+                $worker->id(),
+                'it died holding an arena lock (EOWNERDEAD); the lock was recovered, but whatever it '
+                . 'was writing is not an answer',
+                $pending,
+            )
+            : $worker->crashException($pending);
 
         $this->crashes[] = $crash;
 

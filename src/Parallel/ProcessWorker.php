@@ -74,15 +74,30 @@ final class ProcessWorker implements WorkerInterface
      * @param (\Closure(int): void)|null $afterFork Runs in the child immediately after the fork,
      *                                              before any scheduler or fiber exists.
      *
-     *   # Seam for ticket #5 (preemption)
+     *   # Seam one: the process-global re-arm (#5, preemption)
      *
-     *   This is where a child re-arms its own preemption timer. `setitimer` intervals are **not**
+     *   This is where a child re-arms its own preemption *timer*. `setitimer` intervals are **not**
      *   inherited across `fork()`, so a child of a preemptive parent runs cooperatively — silently,
      *   with no error — unless it arms its own. Installing the SIGALRM handler is not enough either;
-     *   the interval itself has to be set again on this side of the fork.
+     *   the interval itself has to be set again on this side of the fork. Nothing here may depend on
+     *   a scheduler: there is none yet, and that is deliberate.
+     *
+     * @param (\Closure(int, \Lisachenko\NativePhpCoroutines\SchedulerInterface): void)|null $afterScheduler
+     *   # Seam two: the per-scheduler binding (#7)
+     *
+     *   Runs inside {@see WorkerChild::main()}, once this process's scheduler exists and before the
+     *   first coroutine is spawned on it. A `Preemptor` decides whether to preempt by asking
+     *   `$scheduler->current()`, so it has to be built against the child's own scheduler here.
+     *   Re-arming the inherited parent preemptor in seam one instead arms the timer and leaves the
+     *   binding stale — the child is then never preempted and nothing reports it.
      */
-    public static function fork(int $id, TaskDirectory $tasks, ?\Closure $afterFork = null): self
-    {
+    public static function fork(
+        int $id,
+        TaskDirectory $tasks,
+        ?\Closure $afterFork = null,
+        ?\Closure $afterScheduler = null,
+        ?SharedArena $arena = null,
+    ): self {
         self::requireProcessControl();
 
         [$parentEnd, $childEnd] = ControlSocket::pair();
@@ -100,7 +115,7 @@ final class ProcessWorker implements WorkerInterface
             // ---------------------------------------------------------------- child
             $parentEnd->close();
 
-            exit(self::runChild($id, $childEnd, $tasks, $afterFork));
+            exit(self::runChild($id, $childEnd, $tasks, $afterFork, $afterScheduler, $arena));
         }
 
         // ---------------------------------------------------------------- parent
@@ -326,12 +341,15 @@ final class ProcessWorker implements WorkerInterface
      * The child's whole life: reset what it must not inherit, then serve the inbox.
      *
      * @param (\Closure(int): void)|null $afterFork
+     * @param (\Closure(int, \Lisachenko\NativePhpCoroutines\SchedulerInterface): void)|null $afterScheduler
      */
     private static function runChild(
         int $id,
         ControlSocket $control,
         TaskDirectory $tasks,
         ?\Closure $afterFork,
+        ?\Closure $afterScheduler = null,
+        ?SharedArena $arena = null,
     ): int {
         // Output buffers are inherited with their contents. Without this, anything the parent had
         // buffered but not flushed at fork time is printed a second time when this process exits.
@@ -344,15 +362,17 @@ final class ProcessWorker implements WorkerInterface
         pcntl_signal(SIGCHLD, SIG_DFL);
         pcntl_signal(SIGTERM, SIG_DFL);
 
-        // SEAM (#5, preemption): interval timers are NOT inherited across fork. A child of a
-        // preemptive parent has no timer at all until this closure arms one.
+        // SEAM ONE (#5, preemption): interval timers are NOT inherited across fork. A child of a
+        // preemptive parent has no timer at all until this closure arms one. No scheduler exists
+        // yet, on purpose — anything that needs one belongs in seam two.
         if ($afterFork !== null) {
             $afterFork($id);
         }
 
         try {
             // Only now — after the fork — does a scheduler, and with it a fiber, come into being.
-            return WorkerChild::main($control, $tasks);
+            // SEAM TWO (#7) runs inside main(), between that scheduler and the first coroutine.
+            return WorkerChild::main($control, $tasks, null, $arena, $afterScheduler, $id);
         } catch (\Throwable $panic) {
             fwrite(STDERR, sprintf(
                 'worker #%d died in its inbox loop: %s: %s%s',

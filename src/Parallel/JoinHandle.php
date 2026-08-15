@@ -44,12 +44,26 @@ final class JoinHandle implements JoinHandleInterface
 
     public function isComplete(): bool
     {
-        return $this->slots->slot($this->slotId)->complete;
+        $slot = $this->slots->slot($this->slotId);
+
+        if (!$slot->complete) {
+            // The authoritative state is in shared memory, and the process that settled it may not
+            // have told anybody yet. Reading before answering is what makes this honest — and what
+            // makes await() on an already-settled slot free of a park.
+            $this->slots->refresh();
+        }
+
+        return $slot->complete;
     }
 
     public function await(): mixed
     {
         $slot = $this->slots->slot($this->slotId);
+
+        // Read shared memory before every park, never after: a slot settled between the spawn and
+        // this call is complete already, and parking on it would wait for a wakeup that has been
+        // and gone.
+        $this->slots->refresh();
 
         while (!$slot->complete) {
             $coroutine = $this->scheduler->current() ?? throw new \LogicException(
@@ -63,10 +77,18 @@ final class JoinHandle implements JoinHandleInterface
             );
 
             $this->scheduler->suspend(SuspendCommand::BLOCKED);
+
+            $this->slots->refresh();
         }
 
         if ($slot->error !== null) {
             throw $slot->error;
+        }
+
+        // Read straight out of the arena: an OBJ result is the very object the worker mutated, at
+        // the address it lives at, and never a copy rebuilt from an encoding.
+        if ($slot->hasDecoded) {
+            return $slot->decoded;
         }
 
         return ValueCodec::fromRecord($slot->value ?? TaggedRecord::nil());
