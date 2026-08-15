@@ -6,3 +6,4 @@ composer.lock
 /.php-cs-fixer.cache
 /composer-local.json
 /composer-local.lock
+/.claude/worktrees/
