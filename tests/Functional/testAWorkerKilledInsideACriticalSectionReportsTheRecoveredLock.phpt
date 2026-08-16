@@ -35,10 +35,12 @@ $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 $hold = new HoldResultSlotLockTask();
 $runtime->publishTask($hold);
 
-$runtime->run(static function (TaskRuntime $self) use ($hold): void {
+$runtime->run(static function (TaskRuntime $self) use ($hold, $runtime): void {
     parallelDeadline(20.0, 'the waiter on a slot that can never complete');
 
-    $arena = $self->arena();
+    // Diagnostics are read off the concrete runtime, not the task surface — arena() and
+    // supervisor() are deliberately absent from TaskRuntime (see the surface guard test).
+    $arena = $runtime->arena();
 
     if ($arena === null) {
         throw new RuntimeException('this runtime mapped no arena');
@@ -66,7 +68,7 @@ $runtime->run(static function (TaskRuntime $self) use ($hold): void {
 
     echo 'the worker holds the result-slot lock: ', $held ? 'yes' : 'no', PHP_EOL;
 
-    $worker = $self->supervisor()?->worker(0);
+    $worker = $runtime->supervisor()?->worker(0);
     $worker?->signal(SIGKILL);
 
     // Bounded, and outside the scheduler on purpose: awaiting the handle before the process is
