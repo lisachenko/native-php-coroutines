@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Lisachenko\NativePhpCoroutines\Preemption;
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
+use Lisachenko\NativePhpCoroutines\Exception\UndrainableCoroutineException;
 use Lisachenko\NativePhpCoroutines\Scheduler;
 
 /**
@@ -60,11 +61,30 @@ use Lisachenko\NativePhpCoroutines\Scheduler;
  * scheduler therefore keeps a strong reference to every preempted coroutine and drains it
  * ({@see Scheduler::drainPreempted()}), and this class registers a shutdown drain as the backstop
  * for a run that ends by panic or by `exit()`.
+ *
+ * # And the coroutine that will not be drained
+ *
+ * The drain resumes a coroutine until it returns or parks. One that does neither —
+ * `while (true) { $x++; }` — used to be resumed forever, which is a hang at shutdown with nothing
+ * to read. The drain is bounded instead, and this class owns what happens next: the straggler is
+ * still held, never released, and the process is ended deliberately with the diagnosis on STDERR
+ * ({@see self::endTheProcessWithADiagnosis()}). Being held and being drained are separate
+ * obligations; only the second one has a budget.
  */
 final class Preemptor
 {
     /** The slice Layer 2 aims for, matching Go's own preemption interval. */
     public const float DEFAULT_SLICE_SECONDS = 0.01;
+
+    /**
+     * The budget for a drain that is not allowed to give up, in seconds.
+     *
+     * A day, which no request shutdown outlives — "unbounded" written as a number, because the
+     * budget is compared against a monotonic clock and infinity does not survive the conversion.
+     * Only the ext-posix-less fallback uses it, where there is no way to end the process safely and
+     * spinning is the least-bad ending left.
+     */
+    private const float UNBOUNDED_DRAIN_SECONDS = 86_400.0;
 
     private readonly ItimerClock $clock;
 
@@ -163,6 +183,10 @@ final class Preemptor
      *
      * The drain happens *first*, while the clock is still running: a coroutine resumed here may be
      * in a loop that never yields, and only a live timer guarantees that resuming it returns.
+     *
+     * It is bounded, so this returns even for a coroutine that never cooperates. What it could not
+     * get out of the callback is still owned by the scheduler and reported by
+     * {@see Scheduler::undrainableCoroutines()}; disarming does not release anything.
      */
     public function disarm(): void
     {
@@ -314,6 +338,11 @@ final class Preemptor
      * `Runtime::run()` drains on its own way out, so in an ordinary run this finds nothing to do.
      * It exists for the runs that never reach that code, where leaving one preempt-suspended fiber
      * for the engine to destroy is a fatal error with no catch clause anywhere.
+     *
+     * This is also the last place anything can be done about a coroutine that spent its budget
+     * without cooperating, which is why the straggler check lives here rather than only in
+     * `Runtime::run()`: the run may have ended by a panic, by `exit()`, or in a forked worker that
+     * never reaches that code at all, and the obligation is the same in every one of them.
      */
     private function registerShutdownDrain(): void
     {
@@ -327,6 +356,69 @@ final class Preemptor
             $this->scheduler->drainPreempted();
             $this->clock->disarm();
             $this->armed = false;
+
+            $stragglers = $this->scheduler->undrainableCoroutines();
+
+            if ($stragglers !== []) {
+                $this->endTheProcessWithADiagnosis($stragglers);
+            }
+        });
+    }
+
+    /**
+     * Say why, then take the process down before the engine can reach the fiber.
+     *
+     * Every ending available from here was measured (spike S7, `spikes/VERDICTS.md`), and the
+     * choice is forced:
+     *
+     * - letting request shutdown proceed with the fiber alive — `PHP Fatal error: Throwing from
+     *   FFI callbacks is not allowed`, exit 255, uncatchable, on both minors;
+     * - uninstalling the interrupt hook first — the same fatal, because it is the fiber's *saved
+     *   stack* that carries the FFI trampoline frame;
+     * - `exit()` — the same fatal, because it still runs request shutdown;
+     * - a signal to self — the process ends where it stands, no fiber is destroyed, and everything
+     *   already written is kept.
+     *
+     * So the ending is a signal, and it is `SIGKILL` rather than a politer one because a signal
+     * that can be handled can be handled by the application, and this one may not be declined: the
+     * only alternative to it is the fatal above. It is sent from a shutdown function registered
+     * *from inside* this one, which PHP appends to the queue, so every other shutdown function the
+     * application registered still runs first (S7 `--late-shutdown-function`).
+     *
+     * The diagnosis goes to STDERR because at this point in shutdown output buffering may already
+     * be gone and the exception can no longer be thrown anywhere anybody could catch it.
+     *
+     * Without ext-posix there is nothing to send the signal with, and the drain goes back to being
+     * unbounded — a diagnosed wait instead of a silent one. That is the worse ending of the two on
+     * purpose: "never release a preempt-suspended fiber" is an invariant, and waiting is the only
+     * thing left that keeps it.
+     *
+     * @param list<array{id: int, origin: string, resumes: int, seconds: float}> $stragglers
+     */
+    private function endTheProcessWithADiagnosis(array $stragglers): void
+    {
+        $diagnosis = new UndrainableCoroutineException($stragglers);
+
+        if (!function_exists('posix_kill')) {
+            fwrite(STDERR, $diagnosis->getMessage() . PHP_EOL
+                . 'ext-posix is not loaded, so this process cannot be ended safely; draining the '
+                . 'coroutine instead, which will not return until it cooperates' . PHP_EOL);
+
+            // Re-arming is not optional here: the timer is the only reason a resume ever comes
+            // back, and this drain deliberately has no budget to stop it.
+            $this->arm();
+            $this->scheduler->drainPreempted(self::UNBOUNDED_DRAIN_SECONDS, PHP_INT_MAX);
+            $this->disarm();
+
+            return;
+        }
+
+        register_shutdown_function(static function () use ($diagnosis): void {
+            fwrite(STDERR, $diagnosis->getMessage() . PHP_EOL);
+            fflush(STDERR);
+            flush();
+
+            posix_kill((int) getmypid(), SIGKILL);
         });
     }
 }

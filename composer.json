@@ -25,7 +25,7 @@
     },
     "suggest": {
         "ext-pcntl": "Required for parallel workers (fork, signal handling) and for preemption",
-        "ext-posix": "Required for worker supervision"
+        "ext-posix": "Required for worker supervision, and for ending a run that a preempted coroutine refuses to leave"
     },
     "autoload": {
         "psr-4": {

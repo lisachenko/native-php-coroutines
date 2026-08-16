@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Lisachenko\NativePhpCoroutines;
 
 use Lisachenko\NativePhpCoroutines\Exception\NotShareableValueException;
+use Lisachenko\NativePhpCoroutines\Exception\UndrainableCoroutineException;
 use Lisachenko\NativePhpCoroutines\Parallel\ArenaTaskDirectory;
 use Lisachenko\NativePhpCoroutines\Parallel\JoinHandle;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedArena;
@@ -263,7 +264,16 @@ final class Runtime implements TaskRuntime
      * it loses are the ones that are bugs from inside a run anyway — a nested `run()`, a shared
      * root declared where only one process would see it.
      *
+     * A coroutine that was preempted and then never reached a safe point is the one thing this call
+     * cannot simply discard: its fiber is suspended inside the interrupt callback, where it may not
+     * be released. The drain is bounded, so the run ends rather than hanging, and what it could not
+     * drain comes back as {@see UndrainableCoroutineException} naming the coroutine and the line
+     * that spawned it. A panic keeps precedence — it is the bug the program actually has — and the
+     * straggler is reported on STDERR by the preemptor's shutdown handler in that case, which also
+     * ends the process before the engine can destroy the fiber.
+     *
      * @param \Closure(TaskRuntime): mixed $main
+     * @throws UndrainableCoroutineException
      */
     public function run(\Closure $main): void
     {
@@ -284,6 +294,14 @@ final class Runtime implements TaskRuntime
             // suspended inside that callback is fatal at shutdown, not merely leaked.
             $this->preemptor?->disarm();
             $this->supervisor?->shutdown();
+        }
+
+        // Reached only when the run itself did not throw: a panic is the more informative failure
+        // and keeps the caller's attention, and the straggler is reported at shutdown either way.
+        $stragglers = $this->scheduler->undrainableCoroutines();
+
+        if ($stragglers !== []) {
+            throw new UndrainableCoroutineException($stragglers);
         }
     }
 
