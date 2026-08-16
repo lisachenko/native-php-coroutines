@@ -55,6 +55,31 @@ jobs:
       - uses: ramsey/composer-install@v4
       - run: composer phpstan
 
+  # The one soak that runs on a runner. Preemption fails in ways a two-second test
+  # cannot show — a resume that loses a partial result, a fiber left parked inside
+  # the FFI callback — and those need thousands of slices, not hundreds. Twenty
+  # seconds buys ~2000 of them and keeps the job around a minute; the tool exits 2
+  # (INCONCLUSIVE, a red job) rather than 0 if it was never preempted at all, so a
+  # runner where preemption silently stopped working cannot pass this quietly.
+  preemption-soak:
+    name: Preemption soak (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ffi, pcntl
+          ini-values: ffi.enable=1, zend.assertions=1, opcache.jit=off
+          coverage: none
+      - uses: ramsey/composer-install@v4
+      - run: php tools/soak-preemption.php --seconds=20
+
 # Coding standards are deliberately not a CI job. php-cs-fixer is a development
 # tool here: `composer cs:fix` is run locally before proposing a change, so the
 # style is already correct by the time anything reaches CI. Checking it again on

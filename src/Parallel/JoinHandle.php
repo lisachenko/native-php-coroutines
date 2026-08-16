@@ -30,20 +30,32 @@ use Lisachenko\NativePhpCoroutines\SuspendCommand;
  *
  * # The handle owns the answer, not the slot
  *
- * Shared slots are recycled, so holding one open for the rest of a run is a real cost: a pool that
- * never gives slots back exhausts a supply that is pre-sized in the arena and cannot grow. This
- * handle therefore takes its answer out of the slot the first time it is awaited, keeps it, and
- * tells {@see SlotTable::release()} the slot is finished with. Awaiting again replays what was
- * kept — the same value, or the same throwable — and never touches shared memory a second time.
+ * A slot is expensive to hold: the local view costs a few hundred bytes for the life of the run
+ * (issue #24) and the shared record costs one out of a supply that is pre-sized in the arena and
+ * cannot grow (issue #16). This handle holds exactly **one claim** on both, and gives it back at
+ * the first of two moments:
  *
- * The order matters and is not an implementation detail: **capture, then release.** After the
+ * - **when it is awaited.** The answer is taken out of the slot, kept here, and the claim released
+ *   immediately — so a batch that spawns N tasks and awaits them in a loop is down to one live slot
+ *   by the end of the loop rather than N until the array of handles goes out of scope. Awaiting
+ *   again replays what was kept, the same value or the same throwable, and never reads shared
+ *   memory a second time.
+ * - **when it is collected**, for a handle nobody ever awaited. That is what keeps a fire-and-forget
+ *   `spawnParallel()` loop from retaining anything at all.
+ *
+ * Whichever comes first, it happens **once**: two releases for one claim would drop somebody else's.
+ *
+ * The order within the first is not an implementation detail: **capture, then release.** After the
  * release the shared record may already belong to another task, and a read of it would be refused
  * by generation rather than answered — which is the safety net, not the plan.
  */
 final class JoinHandle implements JoinHandleInterface
 {
-    /** Whether the answer has been taken out of the slot and the slot handed back. */
+    /** Whether the answer has been taken out of the slot and kept here. */
     private bool $taken = false;
+
+    /** Whether this handle's one claim has already gone back, from await() or from the destructor. */
+    private bool $released = false;
 
     private mixed $outcome = null;
 
@@ -55,6 +67,31 @@ final class JoinHandle implements JoinHandleInterface
         private readonly int $slotId,
         private readonly int $workerId,
     ) {}
+
+    /**
+     * A handle that was never awaited still gives its claim back.
+     *
+     * A handle is the only thing in this process that can still ask for the result, so its death is
+     * the moment the slot stops being worth keeping. Without this a steady-state
+     * `spawnParallel()->await()` loop retains one `ResultSlot` per spawn for the whole run — a few
+     * hundred bytes a spawn that never show up in `memory_get_usage(true)` (2 MiB chunk granularity)
+     * and never touch the arena watermark, which is exactly the climb
+     * `tools/soak-arena-watermark.php` reports as RSS with both arena counters flat (issue #24).
+     *
+     * For a handle that **was** awaited this is a no-op: the claim went back then, which is the
+     * point of the guard in {@see self::relinquish()}.
+     *
+     * A settled slot whose handle is collected without ever being awaited has its shared record
+     * recycled too, and the answer in it is discarded — deliberately. Spawning without awaiting is
+     * a statement that the result is not wanted, and the alternative is worse: a fire-and-forget
+     * loop would consume the slot supply exactly as it did before recycling existed, which is the
+     * bug this all exists to fix. Nothing is silently misled by it, because a sibling that attached
+     * to the id gets a generation refusal rather than the next task's answer.
+     */
+    public function __destruct()
+    {
+        $this->relinquish();
+    }
 
     public function slotId(): int
     {
@@ -122,12 +159,32 @@ final class JoinHandle implements JoinHandleInterface
             : ValueCodec::fromRecord($slot->value ?? TaggedRecord::nil());
         $this->taken = true;
 
-        $this->slots->release($this->slotId);
+        $this->relinquish();
 
         if ($this->failure !== null) {
             throw $this->failure;
         }
 
         return $this->outcome;
+    }
+
+    /**
+     * Hand back this handle's one claim, at most once.
+     *
+     * Both callers are legitimate and both can happen to the same handle - await() gives the claim
+     * back as soon as the answer is safely copied out, and the destructor covers a handle that was
+     * never awaited - so the guard is what keeps the pair from counting as two. Releasing twice
+     * would take a claim belonging to another handle on the same slot, and `attachResult()` of a
+     * slot this process opened is exactly that situation.
+     */
+    private function relinquish(): void
+    {
+        if ($this->released) {
+            return;
+        }
+
+        $this->released = true;
+
+        $this->slots->release($this->slotId);
     }
 }

@@ -31,6 +31,9 @@ use Lisachenko\NativePhpCoroutines\Preemption\Preemptor;
  * A coroutine parked as *externally wakeable* is excluded from that conclusion: its wakeup was
  * never the scheduler's to produce. That exclusion is what keeps an idle server from reporting
  * itself deadlocked every time it has nothing to do.
+ *
+ * The blocking poll of step 2 is also the only moment a preemptive process has nothing on the CPU,
+ * so it is where the slice clock is stopped and started again — see {@see self::pollIdle()}.
  */
 final class Scheduler implements SchedulerInterface
 {
@@ -335,10 +338,46 @@ final class Scheduler implements SchedulerInterface
                     return;
                 }
 
-                $this->poller->poll($timeout);
+                $this->pollIdle($timeout);
             }
         } finally {
             $this->current = null;
+        }
+    }
+
+    /**
+     * Block in the poller, with the slice clock stopped for exactly as long as that lasts.
+     *
+     * This is the one place in the process where nothing is running: the run queue is empty, every
+     * due timer has fired, and the next thing that happens is a syscall. A preemption timer left
+     * free-running over it raises SIGALRM ~100 times a second, cuts each `stream_select()` short
+     * and has nothing to suspend when it does — the correctness is fine (the poller retries with
+     * the remaining timeout) and the wakeups are pure waste.
+     *
+     * Two things make this safe, and both are structural rather than careful:
+     *
+     * - **Idle is "the poller is about to block", not "the queue looks empty".** The pause opens
+     *   after the queue has drained and the timers have fired, and closes before anything is
+     *   dequeued, so a coroutine that is about to run is never the one that lost its slice.
+     * - **The re-arm is a `finally` over the whole call.** Every way out of `poll()` — a readiness,
+     *   a timeout, the EINTR retry that a signal sends it round, a `RuntimeException` from a broken
+     *   descriptor — leaves the clock running again. A missed re-arm would not throw anywhere: it
+     *   would quietly leave the process cooperative behind a preemptor still reporting itself
+     *   armed.
+     *
+     * The preemptor is read once into a local, so the pause and the re-arm are always the same
+     * object's, whatever a callback fired from inside the poll does with the attachment.
+     */
+    private function pollIdle(?float $timeout): void
+    {
+        $preemptor = $this->preemptor;
+
+        $preemptor?->pauseSlicing();
+
+        try {
+            $this->poller->poll($timeout);
+        } finally {
+            $preemptor?->resumeSlicing();
         }
     }
 

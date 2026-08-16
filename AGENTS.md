@@ -134,6 +134,16 @@ The mechanism was selected by experiment, and the negative result is the load-be
 - **The scheduler must hold a strong reference to every preempted fiber and drain them before
   shutdown.** Dropping one is fatal, and uninstalling the hook first does not help.
 - **Each forked worker re-arms its own timer** — `setitimer` intervals are cleared in the child.
+- **The clock is stopped for the idle poll, and the re-arm is a `finally`.** A free-running 10 ms
+  timer wakes an idle preemptive process ~100 times a second to preempt nobody, so
+  `Scheduler::pollIdle()` brackets the one blocking call with `Preemptor::pauseSlicing()` and
+  `resumeSlicing()`. Two conditions make that safe and neither is negotiable: **idle means the
+  poller is about to block**, never "the run queue looks empty" — a coroutine about to run must
+  still be sliceable — and the re-arm lives in a `finally` spanning the whole `poll()`, so no way
+  out of it (a readiness, a timeout, the EINTR retry the poller does internally, a throw) can leave
+  the process silently cooperative. Pausing is not disarming: the hook stays installed, SIGALRM
+  stays ours, and `isArmed()` goes on saying yes. A missed re-arm reports nothing and fails nowhere,
+  which is why it is structural rather than careful.
 - **10 ms is a target, not a guarantee.** A single internal opcode is not interruptible: `sort()`
   over 4M ints delayed preemption by 1.6–2.0 s. Never document or assume a bounded slice; document
   the caveat with it.
@@ -240,19 +250,28 @@ in every process.
   `ParallelTaskException` — one that says the detail is unavailable, never one that presents
   another object's fields as this task's failure.
 - **Result slots are a bounded supply that circulates.** The table is pre-sized in the arena before
-  the fork and never grows, but a slot goes back on the substrate's free list once its `JoinHandle`
-  has taken the answer, so the supply limits **concurrency**, not throughput. Two kinds do not come
-  back: a handle nobody awaits (nothing has read it, so nothing can say it is safe) and a slot whose
-  worker died before settling it (still pending in shared memory, and a zombie worker may yet write
-  to it — recycling it would let that write land on another task). `soak-arena-watermark.php` reports
-  the high-water mark and requires it to plateau exactly.
+  the fork and never grows, but a slot goes back on the substrate's free list once the `JoinHandle`
+  holding it is awaited or collected, so the supply limits **concurrency**, not throughput. One kind
+  does not come back: a slot whose worker died before settling it, which is still pending in shared
+  memory where a zombie worker may yet write to it — recycling it would let that write land on
+  another task. `soak-arena-watermark.php` reports the high-water mark and requires it to plateau
+  exactly.
+- **A slot has two lifetimes and one counter, and confusing them is how both bugs happened.** The
+  **local view** (`SlotTable`'s entry) is per-process bookkeeping; the **shared record** is the
+  substrate's. `open()`/`adopt()` hand out one claim, `JoinHandle` carries it and gives it back once,
+  and when the last claim goes: the view is always forgotten, whatever this process's role, while the
+  record goes back only if this process **owns** it and the family really settled it. Retaining
+  settled views costs a `ResultSlot` per spawn for the whole run — invisible to every arena counter
+  and to `memory_get_usage(true)` at its 2 MiB chunk granularity, surfacing only as the parent's RSS
+  climbing (issue #24). Retaining records exhausts the table (issue #16). A pending slot's view is
+  never forgotten whatever its claims: `failPendingOf()` still has to turn it into a throw.
 - **A slot id is a ticket, not an index**, and the difference is a safety property. Index and
   generation are packed into the 32 bits a wake event carries, the generation moves the moment the
   owner releases the slot, and every substrate verb refuses a mismatch by name. Keep an id only for
   as long as the result it names: `attachResult()` on a released id throws, which is the design
-  working, not a race. Releasing is the **owner's** job — the process that spawned the task — so a
-  second process that attaches to somebody else's slot has to finish reading before the owner's
-  `await()` returns.
+  working, not a race. Releasing the record is the **owner's** job — the process that spawned the
+  task — so a second process that attaches to somebody else's slot has to finish reading before the
+  owner's handle goes.
 - **Capture, then release.** `SlotTable::settle()` is the only place this package reads a shared
   slot record, and it copies the whole outcome — the decoded value, or a `ParallelTaskException`
   built from the shared error object's named properties — into per-process state before returning.
@@ -261,6 +280,10 @@ in every process.
   `STR` answer is an arena address and the arena frees nothing, so releasing a slot returns the slot
   record and never the memory the answer lives in. Error graphs are not reclaimed at all — a child
   may never free arena memory — and stay leak-until-teardown on purpose.
+- **A handle collected without ever being awaited discards its answer and recycles the slot.**
+  Spawning without awaiting says the result is not wanted, and the alternative — keeping the record
+  for the life of the run — is the exhaustion bug itself. Nothing is silently misled: a sibling that
+  attached to the id gets a generation refusal, not the next task's answer.
 
 ## Environment
 
@@ -302,9 +325,9 @@ composer cs:check    # the same, without writing
 composer phpstan     # level max, must be clean
 ```
 
-CI runs **`tests` and `static-analysis` only**, both across PHP 8.4 and 8.5. The coding-standards job
-was deliberately removed: php-cs-fixer is a development tool here, and re-checking on a runner only
-turns a fixable formatting nit into a red build. **Do not re-add it.**
+CI runs **`tests`, `static-analysis` and the bounded `preemption-soak`**, all across PHP 8.4 and 8.5.
+The coding-standards job was deliberately removed: php-cs-fixer is a development tool here, and
+re-checking on a runner only turns a fixable formatting nit into a red build. **Do not re-add it.**
 
 ### A segfault is an engine-level bug, never a flaky test
 
@@ -342,6 +365,7 @@ Not part of `composer test` — these run for a long time and are run deliberate
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-preemption.php --seconds=30
 ```
 
 | Tool | Asserts | Exit codes |
@@ -349,6 +373,7 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | `tools/soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb or growth past the tolerance fails | 0 flat, 1 climbing, 2 inconclusive |
 | `tools/soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
 | `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, **result-slot consumption plateaus exactly**, process memory stays flat, and no child survives. Leak-until-teardown is the design for bytes, so their criterion is a plateau rather than zero growth; a slot is either handed back or it is not, so its criterion has no tolerance at all | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `tools/soak-preemption.php` | a continuous preemptive run of call-free burners, parkers and socket-pair IO: every burner's arithmetic matches the uninterrupted reference, memory stays flat, every coroutine finishes and none is left parked in the interrupt callback, and the process reaches its own verdict instead of a fatal | 0 correct and flat, 1 a check failed, 2 inconclusive — including a run that was never preempted, which measured a cooperative workload |
 
 The watermark soak runs on a deliberately small slot table (`--slots=64`, far fewer than the run
 spawns), because a table big enough to absorb the whole run would prove nothing about slots coming
@@ -357,9 +382,17 @@ back.
 Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`,
 `--leak-slots`). Use that after changing the detection logic: a detector nobody has seen fail is a
 detector nobody knows works. `soak-arena-watermark.php --self-test` rewrites a shared string property
-every round, which is the substrate's documented per-write arena cost, and must come back FAIL;
+every round, which is the substrate's documented per-write arena cost, and must come back FAIL, and
 `--leak-slots` takes a slot every round without giving it back and must fail on the **slot** series
-with the byte series still flat.
+with the byte series still flat. `soak-preemption.php --self-test` corrupts one burner's sum by a
+single unit — the smallest wrong answer a lost resume could produce — and `--inject-leak` retains a
+block per round; both must come back FAIL.
+
+**The preemption soak is the exception to "CI runs tests and static-analysis only".** It runs there,
+20 seconds per minor, because its subject is the one thing a two-second test cannot show: the suite's
+longest continuous preemptive run is a few hundred slices, and a resume that loses a partial result
+or a fiber left in the FFI callback is a defect that only surfaces over thousands. Keep it bounded —
+a soak job that grows into minutes is a soak job somebody will delete.
 
 ## Repository map
 
@@ -383,7 +416,8 @@ src/Parallel/Protocol/     Tag, TaggedRecord, Opcode, ControlRecord — the valu
 src/Exception/             the catchable failures, each naming its remedy
 tests/Functional/*.phpt    the suite, one behaviour per file
 tests/Support/             fakes for the unit-shaped tests
-tools/                     soak tooling (memory flatness, process hygiene, arena watermark)
+tools/                     soak tooling (memory flatness, process hygiene, arena watermark,
+                           preemption under a long continuous run)
 spikes/                    the preemption experiments and their verdicts; not run by composer test
 ```
 

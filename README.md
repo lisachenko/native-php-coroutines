@@ -469,21 +469,31 @@ $runtime = new Runtime(
 ```
 
 **It is a limit on concurrency, not on throughput.** A slot goes back on the substrate's free list
-as soon as its `JoinHandle` has taken the answer, so a pool doing millions of spawns needs only as
-many slots as it has results *in flight at once*:
+as soon as the `JoinHandle` holding it is awaited or collected — whichever comes first — so a pool
+doing millions of spawns needs only as many slots as it has results *in flight at once*:
 
 | What the workload does | Slots it needs |
 | --- | --- |
 | spawn, `await()`, repeat | 1 |
 | spawn N, then await all N | N |
 | a pool of W workers kept saturated | ≈ W, plus whatever is queued ahead of them |
-| a handle that is spawned and never awaited | 1, for the rest of the run |
+| spawn and never await, handle dropped | 1, until the handle is collected |
+| spawn and never await, handle kept | 1, for as long as the handle is kept |
 | a task whose worker died before settling | 1, for the rest of the run |
 
-The last two are the ones that actually consume the budget. A handle nobody awaits has never had its
-answer read, so nothing can say the slot is safe to reuse; a slot whose worker was killed mid-task is
-still *pending* in shared memory and a zombie worker may yet write to it, so recycling it could let
-that write land on another task. Both are deliberately left out of circulation.
+Only the last row really consumes the budget. A slot whose worker was killed mid-task is still
+*pending* in shared memory and a zombie worker may yet write to it, so recycling it could let that
+write land on another task; it is deliberately left out of circulation.
+
+A handle nobody awaits is not a leak: dropping it recycles the slot and **discards the answer**,
+which is what spawning without awaiting asks for. Dropping one whose task has *not* settled yet
+keeps the slot until it does, because a worker that has not answered may still write to the record —
+so firing tasks off faster than the pool drains them still costs one slot per task in flight, which
+is the same concurrency rule as everywhere else, and overrunning the table is the same typed
+refusal. The value itself is not lost to the arena — the
+arena frees nothing — only the slot record's claim on it goes. If you want the result, await; if you
+want to await it later or elsewhere, keep the handle or the id, and note that an id whose owner has
+already released it is refused rather than answered.
 
 Spawn **arguments** do not cost a slot in this runtime: a `SPAWN` record carries the task's arena
 address in its own 16 bytes, so the only slot a spawn takes is the one its result lands in.
@@ -566,6 +576,10 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 - **Preemption is opt-in** (`new Runtime(preemptive: true)`) and, once armed, makes coroutine
   lifetimes the scheduler's business: a preempted coroutine is suspended inside an engine callback,
   so it is drained rather than discarded when a run ends.
+- **An idle preemptive runtime is as quiet as a cooperative one.** The slice clock is stopped for
+  exactly the time the process spends blocked in the poller — there is no coroutine to take the CPU
+  away from — and started again on every way out of it, so a server waiting for work does not pay a
+  hundred wakeups a second. Every forked worker gets the same treatment for its own inbox wait.
 - **`workers: 0` maps no arena at all.** The shared surface is then refused with a message naming the
   remedy rather than half-composed — a cooperative runtime stays exactly as cheap as it was.
 
@@ -578,8 +592,8 @@ composer phpstan                                               # level max
 composer cs:fix                                                # PER-CS2.0, a local step
 ```
 
-Coding standards are deliberately **not** a CI job — CI runs `tests` and `static-analysis` across
-PHP 8.4 and 8.5. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
+Coding standards are deliberately **not** a CI job — CI runs `tests`, `static-analysis` and a
+bounded `preemption-soak` across PHP 8.4 and 8.5. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
 version and a minimal reproducer instead of retrying.
 
 Contributor rules — the engine contracts, the shared-memory disciplines, the preemption obligations
@@ -593,6 +607,7 @@ Long-running checks, run deliberately, not part of `composer test`:
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-preemption.php --seconds=30
 ```
 
 | Tool | Asserts | Exit codes |
@@ -600,10 +615,18 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | `soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb, or growth past `--tolerance`, fails | 0 flat, 1 climbing, 2 inconclusive |
 | `soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
 | `soak-arena-watermark.php` | the arena watermark **plateaus** under a steady-state parallel workload, process memory stays flat, and no child survives. The arena is a bump allocator with no free list, so the criterion is a plateau and not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `soak-preemption.php` | a `--seconds=N` preemptive run of call-free burners, parkers and socket-pair IO stays correct and flat: every burner's arithmetic matches the uninterrupted reference, memory is flat, every coroutine finishes with none left parked in the interrupt callback, and the process reaches its own verdict rather than a fatal | 0 correct and flat, 1 a check failed, 2 inconclusive (including "never preempted") |
 
 Each tool can produce its own failure on demand — `--inject-leak` and `--self-test` — so the detector
 itself is testable. `soak-arena-watermark.php --self-test` rewrites a shared string property every
 round, which costs an arena block per write by design, and must come back FAIL.
+`soak-preemption.php --self-test` corrupts one burner's sum by a single unit and must fail the
+arithmetic check; `--inject-leak` retains a block per round and must fail the memory check.
+
+`soak-preemption.php` is the only check in CI besides the suite and PHPStan: a 20-second run on each
+minor, because the failures preemption is prone to — a resume that loses a partial result, a fiber
+left parked in the FFI callback — need a long continuous run to appear at all, and the tests only
+ever preempt for a second or two.
 
 ## License
 
