@@ -9,7 +9,6 @@ error_reporting=E_ALL & ~E_DEPRECATED
 
 declare(strict_types=1);
 
-use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
 use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedCounter;
@@ -26,15 +25,6 @@ $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 $runtime->declareShared('counter', SharedCounter::class);
 
 echo 'declared before the fork: ', $runtime->arena()?->hasRoot('counter') === true ? 'yes' : 'no', PHP_EOL;
-
-// A capacity-0 shared channel is refused at declaration rather than delivered as one that usually
-// fails to hand anything over — the cross-process rendezvous handshake counts receivers parked
-// inside the substrate's own blocking recv(), which this runtime deliberately never calls.
-try {
-    $runtime->declareShared('rendezvous', SharedChannel::class, 0);
-} catch (InvalidArgumentException $refusal) {
-    echo $refusal->getMessage(), PHP_EOL;
-}
 
 $runtime->run(static function (TaskRuntime $self): void {
     // After the fork the workers already exist, so a root created now lives in this process alone.
@@ -56,7 +46,6 @@ echo 'children left: ', parallelChildrenLeft(), PHP_EOL;
 ?>
 --EXPECT--
 declared before the fork: yes
-shared channel "rendezvous" needs a capacity of at least 1: a cross-process rendezvous accepts a send only while a sibling is parked inside the substrate's own blocking recv(), and this runtime parks Fibers on its poller instead
 shared root "late" cannot be declared after the workers have forked: a root is inherited by address, so one created now exists only in this process. Declare every root before run() forks the pool
 closure "late" cannot be shared: the fork barrier has already been passed, and only a closure registered before it exists at the same address in every worker
 children left: none

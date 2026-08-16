@@ -143,6 +143,16 @@ final class SharedArena
     private readonly SharedArray $family;
 
     /**
+     * Wake slots the registry was created with — the size of the largest family this arena serves.
+     *
+     * Also the waiter capacity every shared channel is created with: a capacity-0 channel registers
+     * one entry per process that has a receiver waiting, so a table smaller than the family could
+     * refuse a registration that is perfectly legitimate, and a table larger than it could never be
+     * filled. Pre-sized either way — no arena table ever grows.
+     */
+    private readonly int $wakeSlots;
+
+    /**
      * Roots declared before the fork: name => descriptor. Every child inherits this table with the
      * rest of the parent's heap, so a worker resolving a root needs no lookup protocol at all.
      *
@@ -209,7 +219,8 @@ final class SharedArena
             $slotCount,
             self::SLOTS_ROOT,
         );
-        $this->family = SharedArray::create($this->allocator, $this->codec, $wakeSlots, self::FAMILY_ROOT);
+        $this->family    = SharedArray::create($this->allocator, $this->codec, $wakeSlots, self::FAMILY_ROOT);
+        $this->wakeSlots = $wakeSlots;
 
         // The panic path persists one of these in whichever worker died, and the waiter attaches it
         // by address. Loaded here so the whole family agrees on its class entry.
@@ -554,12 +565,15 @@ final class SharedArena
     private function createRoot(string $name, string $class, int $capacity): array
     {
         if (is_a($class, SharedChannel::class, true) || is_a($class, SubstrateChannel::class, true)) {
-            if ($capacity < 1) {
+            if ($capacity < 0) {
+                // Capacity 0 is a rendezvous, exactly as it is for a local Channel: the substrate
+                // now lets a receiver parked on this runtime's poller count as the handoff partner
+                // (registerReceiver()), so nothing has to spin inside the substrate for it to work.
                 throw new \InvalidArgumentException(sprintf(
-                    'shared channel "%s" needs a capacity of at least 1: a cross-process rendezvous '
-                    . 'accepts a send only while a sibling is parked inside the substrate\'s own '
-                    . 'blocking recv(), and this runtime parks Fibers on its poller instead',
+                    'shared channel "%s" cannot have a negative capacity, got %d; 0 is a '
+                    . 'cross-process rendezvous and a positive number buffers that many records',
                     $name,
+                    $capacity,
                 ));
             }
 
@@ -568,7 +582,7 @@ final class SharedArena
                 $this->codec,
                 $this->wake,
                 $capacity,
-                SubstrateChannel::DEFAULT_WAITERS,
+                max($this->wakeSlots, SubstrateChannel::DEFAULT_WAITERS),
                 $name,
             );
 

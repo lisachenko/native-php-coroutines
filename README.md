@@ -552,10 +552,13 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   whichever process filled it. Closures are shareable only by **pre-fork registration**
   (`registerSharedClosure()`); work created after the fork travels as a `Task`. Anything else throws
   `NotShareableValueException` naming the remedy.
-- **A shared channel needs capacity ≥ 1.** A cross-process rendezvous only accepts a send while a
-  sibling is parked inside the substrate's own blocking `recv()`, and this runtime parks Fibers on its
-  poller instead — so capacity 0 is refused rather than delivered as a channel that usually does
-  nothing.
+- **A capacity-0 shared channel is a real rendezvous, except as a `select` send case.** A
+  cross-process handoff is accepted while a receiver is waiting, and a Fiber parked on this
+  runtime's poller counts as one: the channel registers this process with the substrate while it has
+  a waiting receiver and withdraws when the last one leaves. `send()` returns once the value has
+  been **taken**, which is also why a rendezvous cannot be a `select` *send* case — a case has to
+  resolve without parking, and the deposit is one step too early to promise a take. That one case is
+  refused with the remedies named; receive cases mix with local channels as usual.
 - **`persist()` is per instance, roots are per name.** Two `RenderJob`s — or twenty — are twenty
   graphs, none superseding another, and two roots of one class are two roots. What a design pays
   for spawning arbitrary unpublished tasks is arena memory per spawn, held until teardown;

@@ -245,9 +245,18 @@ in every process.
 
 ### Known limits of the parallel surface, stated rather than discovered
 
-- **A shared channel needs capacity ≥ 1.** The substrate's cross-process rendezvous only accepts a
-  send while a sibling is parked inside *its* blocking `recv()`, which this runtime never calls.
-  Capacity 0 is refused at declaration instead of delivered as a channel that usually does nothing.
+- **A capacity-0 shared channel works, but not as a `select` send case.** The substrate's handoff
+  gate asks whether a receiver is waiting, and it used to count only receivers parked inside *its*
+  blocking `recv()` — which this runtime never calls. It now also counts a receiver **registered**
+  from here (`registerReceiver()`/`cancelReceiver()`), so a Fiber parked on this poller is a valid
+  rendezvous partner and `declareShared(..., capacity: 0)` is accepted. The registration is a claim
+  about presence, never about storage: the record still goes into the one ring slot a capacity-0
+  channel allocates, which is what makes a withdrawal total — a select loser cancels and the record
+  it may have attracted simply waits in the ring for the next receiver while its sender stays
+  parked. Nothing is lost and nothing is delivered twice. `send()` therefore returns only once the
+  value has been **taken**, and that is exactly why a rendezvous cannot be a `select` **send** case:
+  a case must resolve without parking, and the deposit — the only non-parking moment — is one step
+  too early. That case is refused with both remedies named; receive cases compose as usual.
 - **Graphs are keyed per instance, and each unpublished spawn keeps its memory until teardown.**
   The substrate registers a persisted graph under a name minted from its own root address
   (`persistInstance()`), so any number of tasks of one class are in flight at once and none
