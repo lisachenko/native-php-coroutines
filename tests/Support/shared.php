@@ -237,6 +237,136 @@ final class SharedSendTask implements Task
 }
 
 /**
+ * Hands values over a **capacity-0** shared channel, one rendezvous at a time.
+ *
+ * Everything a rendezvous claim needs is measured here rather than in the parent, because the
+ * sender is the side that has to wait: `send()` on a capacity-0 channel deposits the record and
+ * then parks a second time until somebody has actually taken it, so the elapsed time is the proof
+ * that the handshake completed rather than merely started. The worker's own poller wakeup count
+ * comes back with it — a sender that regressed into a poll loop would blow the bound long before
+ * the values stopped arriving.
+ *
+ * The answer is a formatted string on purpose: it travels as an arena `zend_string`, and a test
+ * asserting on it fails with the offending number in the diff instead of a bare `false`.
+ */
+final class RendezvousSendTask implements Task
+{
+    public function __construct(
+        private readonly string $root,
+        private readonly int $count,
+        private readonly string $prefix = 'r',
+        private readonly float $floorSeconds = 0.0,
+        private readonly int $wakeupBound = 64,
+        private readonly float $delay = 0.0,
+    ) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        $channel = $runtime->shared($this->root);
+
+        if (!$channel instanceof \Lisachenko\NativePhpCoroutines\ChannelInterface) {
+            throw new \LogicException('the shared channel root is not available in this worker');
+        }
+
+        if ($this->delay > 0.0) {
+            Coroutine::sleep($this->delay);
+        }
+
+        $started = microtime(true);
+
+        for ($index = 0; $index < $this->count; ++$index) {
+            $channel->send($this->prefix . $index);
+        }
+
+        $elapsed = microtime(true) - $started;
+
+        // A deliberate downcast: the wakeup counter is diagnostics, which the task surface
+        // intentionally does not carry. Real tasks never need the concrete runtime.
+        $arena   = $runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime ? $runtime->arena() : null;
+        $wakeups = $arena?->wakeups() ?? -1;
+
+        return sprintf(
+            'sent %d, handoff %s, wakeups %s',
+            $this->count,
+            $elapsed >= $this->floorSeconds ? 'waited for a receiver' : 'returned early',
+            $wakeups >= 0 && $wakeups <= $this->wakeupBound ? 'bounded' : 'UNBOUNDED (' . $wakeups . ')',
+        );
+    }
+}
+
+/**
+ * Registers as a rendezvous receiver at once, then refuses to run for a while before taking.
+ *
+ * The gap between the two is the whole point. A registered partner makes the sender's *deposit*
+ * possible immediately; holding this worker's only thread in a call-free loop makes the *take*
+ * impossible until the loop ends. A sender that treated the deposit as the end of the handshake
+ * would return during that window, and the measurement on the other side would show it.
+ */
+final class SlowTakeRendezvousTask implements Task
+{
+    public function __construct(
+        private readonly string $root,
+        private readonly float $busySeconds = 0.4,
+    ) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        $channel = $runtime->shared($this->root);
+
+        if (!$channel instanceof \Lisachenko\NativePhpCoroutines\ChannelInterface) {
+            throw new \LogicException('the shared channel root is not available in this worker');
+        }
+
+        $taken        = new \stdClass();
+        $taken->value = null;
+
+        Coroutine::spawn(static function () use ($channel, $taken): void {
+            $taken->value = $channel->recv();
+        });
+
+        // One yield is enough to let the receiver reach its park, which is where it registers.
+        Coroutine::yield();
+
+        // A call-free loop owns this worker cooperatively: the receiver above cannot run, the
+        // poller cannot run, and the value can therefore be deposited but not taken.
+        $end = microtime(true) + $this->busySeconds;
+
+        while (microtime(true) < $end) {
+            // deliberately empty
+        }
+
+        for ($round = 0; $round < 500 && $taken->value === null; ++$round) {
+            Coroutine::sleep(0.01);
+        }
+
+        return $taken->value ?? 'nothing was taken';
+    }
+}
+
+/**
+ * Asks, from another process, whether anybody is registered to take a handoff right now.
+ *
+ * This is what makes "a select loser leaves no stale registration" a cross-process claim instead of
+ * a local bookkeeping check: the registration lives in the arena, and the process that would act on
+ * it is not the process that made it.
+ */
+final class ProbeRendezvousPartnerTask implements Task
+{
+    public function __construct(private readonly string $root) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        $channel = $runtime->shared($this->root);
+
+        if (!$channel instanceof \Lisachenko\NativePhpCoroutines\Parallel\SharedChannel) {
+            throw new \LogicException('the shared channel root is not available in this worker');
+        }
+
+        return $channel->hasWaitingReceiver() ? 'a partner is present' : 'nobody is waiting';
+    }
+}
+
+/**
  * Awaits a result slot the *parent* opened, from inside a worker.
  *
  * The slot id is the whole handle: the state lives in shared memory, so a process that never heard
