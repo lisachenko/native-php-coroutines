@@ -236,7 +236,9 @@ in every process.
   the fork, which allocates nothing per spawn.
 - **One `SharedError` per panic.** Each capture is its own instance graph, so two workers failing
   near-simultaneously each leave an error their waiter can still attach by the address its own
-  slot carries.
+  slot carries. A panic slot whose payload does not attach as a `SharedError` still surfaces as a
+  `ParallelTaskException` — one that says the detail is unavailable, never one that presents
+  another object's fields as this task's failure.
 - **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
   supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
   assumes.
