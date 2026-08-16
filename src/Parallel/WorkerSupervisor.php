@@ -221,8 +221,11 @@ final class WorkerSupervisor
             $target->dispatch($slot->id, $address);
         } catch (\Throwable $failure) {
             // The worker went away between the placement and the write. The slot exists, so it must
-            // be completed with the failure rather than left for a waiter to park on forever.
+            // be completed with the failure rather than left for a waiter to park on forever — and
+            // the claim open() handed out is given back here, because no JoinHandle will be built to
+            // carry it.
             $this->slots->completeWithError($slot->id, $failure);
+            $this->slots->release($slot->id);
 
             throw $failure;
         }

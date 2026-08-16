@@ -37,6 +37,23 @@ use Lisachenko\SharedData\Ipc\SlotResult;
  * substrate's `readSlot()`, which takes the slot's mutex for the `{state, tag, payload}` triple and
  * materializes the value after releasing it, so a reader can never observe a tag from one generation
  * and a payload from another.
+ *
+ * # A local view lives as long as somebody here can still read it, and no longer
+ *
+ * The authority is shared memory, so the entry in this table is only a per-process convenience: the
+ * identity, the parked coroutines and the answer once it has been materialized. It is therefore
+ * **claimed** — {@see self::open()} and {@see self::adopt()} hand out one claim, a {@see JoinHandle}
+ * carries it, and the handle's destructor gives it back. A settled slot with no claims and no
+ * waiters is forgotten.
+ *
+ * Keeping settled slots instead is a real leak and a quiet one: a `spawnParallel()->await()` loop
+ * retains a `ResultSlot` per spawn (~220 bytes with its array bucket) for the life of the run, which
+ * is far below the 2 MiB chunk granularity of `memory_get_usage(true)` and costs the arena nothing,
+ * so it shows up only as the parent's RSS climbing — the shape reported in issue #24.
+ *
+ * Forgetting the view does **not** free the shared slot. Ids are bump-allocated from a pre-sized
+ * table and never recycled, on purpose, and the settled answer stays readable by every process of
+ * the family — {@see self::adopt()} takes a fresh view of it whenever one is wanted again.
  */
 final class SlotTable
 {
@@ -64,13 +81,31 @@ final class SlotTable
         return $this->arena !== null;
     }
 
-    /** Reserve a slot for work about to be dispatched to $workerId. */
+    /**
+     * How many slots this process still holds a local view of.
+     *
+     * A diagnostic, and the one a memory gate wants: in a steady state it tracks the work actually
+     * in flight, so a number that grows with the *total* number of spawns is the leak this class's
+     * claim counting exists to prevent.
+     */
+    public function liveViews(): int
+    {
+        return count($this->slots);
+    }
+
+    /**
+     * Reserve a slot for work about to be dispatched to $workerId.
+     *
+     * The slot comes back holding **one claim**, which the caller owns and must hand to a
+     * {@see JoinHandle} — or {@see self::release()} itself if the dispatch never happens.
+     */
     public function open(int $workerId): ResultSlot
     {
         $id = $this->arena?->slotTable()->allocateSlot() ?? $this->nextId++;
 
         $slot = new ResultSlot($id, $workerId);
 
+        $slot->claims           = 1;
         $this->slots[$slot->id] = $slot;
 
         return $slot;
@@ -82,6 +117,9 @@ final class SlotTable
      * This is what makes a result awaitable from a process that did not spawn the task: the slot id
      * is the whole handle, the state is in shared memory, and a process that has attached to the
      * arena can read it whether or not it has ever heard of the worker that will settle it.
+     *
+     * Like {@see self::open()} this hands out a claim, so adopting a slot twice is two claims and
+     * the view survives until both handles are gone.
      */
     public function adopt(int $slotId, int $workerId = -1): ResultSlot
     {
@@ -92,7 +130,32 @@ final class SlotTable
             );
         }
 
-        return $this->slots[$slotId] ??= new ResultSlot($slotId, $workerId);
+        $slot = $this->slots[$slotId] ??= new ResultSlot($slotId, $workerId);
+
+        ++$slot->claims;
+
+        return $slot;
+    }
+
+    /**
+     * Give up one claim on a slot's local view, and forget the view if that was the last one.
+     *
+     * Paired with the claim {@see self::open()} and {@see self::adopt()} hand out — {@see JoinHandle}
+     * releases in its destructor, so the view lives exactly as long as something in this process can
+     * still ask for the result. Releasing a slot this table does not know is a no-op: it has already
+     * been forgotten, which is the same outcome.
+     */
+    public function release(int $slotId): void
+    {
+        $slot = $this->slots[$slotId] ?? null;
+
+        if ($slot === null) {
+            return;
+        }
+
+        $slot->claims = max(0, $slot->claims - 1);
+
+        $this->forgetIfSettled($slot);
     }
 
     public function slot(int $slotId): ResultSlot
@@ -263,5 +326,27 @@ final class SlotTable
                 $this->scheduler->schedule($waiter);
             }
         }
+
+        // A slot nobody holds any more is settled here for the last time; keeping its view would
+        // retain a ResultSlot per spawn for the rest of the run.
+        $this->forgetIfSettled($slot);
+    }
+
+    /**
+     * Drop the local view of a slot that has settled and that nothing in this process still holds.
+     *
+     * Only ever a *local* forget. The shared slot keeps its answer and keeps its id: any process of
+     * the family — including this one, through {@see self::adopt()} — can read it again afterwards,
+     * because the authority was never this table. A slot that is still pending stays, whatever its
+     * claim count: the supervisor owes it either an answer or a crash, and
+     * {@see self::failPendingOf()} has to be able to find it.
+     */
+    private function forgetIfSettled(ResultSlot $slot): void
+    {
+        if ($slot->claims > 0 || !$slot->complete || $slot->waiters !== []) {
+            return;
+        }
+
+        unset($this->slots[$slot->id]);
     }
 }
