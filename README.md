@@ -496,8 +496,10 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   sibling is parked inside the substrate's own blocking `recv()`, and this runtime parks Fibers on its
   poller instead — so capacity 0 is refused rather than delivered as a channel that usually does
   nothing.
-- **`persist()` and shared roots are keyed by class.** One live graph per class: a second instance
-  supersedes the first, so a design that needs several gives them distinct classes or a `SharedArray`.
+- **`persist()` is per instance, roots are per name.** Two `RenderJob`s — or twenty — are twenty
+  graphs, none superseding another, and two roots of one class are two roots. What a design pays
+  for spawning arbitrary unpublished tasks is arena memory per spawn, held until teardown;
+  `publishTask()` before the fork allocates nothing per spawn.
 - **The arena is a bump allocator with no free list.** Blocks are reclaimed when the region dies with
   the creating process, and rewriting a shared string property costs a block per write. Size for it,
   and watch the watermark **plateau** rather than expecting it to fall.

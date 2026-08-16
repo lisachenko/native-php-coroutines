@@ -429,7 +429,10 @@ final class SharedArena
         // happens before the fork, which is what gives the whole family one class entry for it.
         class_exists($object::class);
 
-        return $this->store->persist($object::class, $object, true);
+        // Per instance, not per class: each graph's registry entry is named by its own root
+        // address, so persisting a second instance of one class never supersedes the first —
+        // which is what lets two tasks of one class be in flight at once.
+        return $this->store->persistInstance($object, true);
     }
 
     /** The arena address of a shared instance — the only identity that means anything across a fork. */
@@ -579,8 +582,10 @@ final class SharedArena
             return [self::KIND_ARRAY, $array->address()];
         }
 
+        // Keyed by the ROOT NAME, not the class: two roots of one class are two entries, and the
+        // name the application declared is exactly the name the registry files the graph under.
         $instance = new $class();
-        $shared   = $this->store->persist($class, $instance, true);
+        $shared   = $this->store->persist($name, $instance, true);
         $address  = $this->store->sharedIdOf($shared);
 
         $this->arena->putRoot($name, $address);

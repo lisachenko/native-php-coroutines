@@ -30,7 +30,7 @@ $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 $task = new SharedPanicTask();
 $runtime->publishTask($task);
 
-$runtime->run(static function (TaskRuntime $self) use ($task): void {
+$runtime->run(static function (TaskRuntime $self) use ($task, $runtime): void {
     Timer::after(15.0, static function (): void {
         throw new RuntimeException('deadline: the panic never reached the waiter');
     });
@@ -46,9 +46,10 @@ $runtime->run(static function (TaskRuntime $self) use ($task): void {
         echo 'worker: ', $panic->workerId(), PHP_EOL;
     }
 
-    // The pool is unharmed: a panicking task is an ordinary outcome, not a lost worker.
+    // The pool is unharmed: a panicking task is an ordinary outcome, not a lost worker. The
+    // supervisor is diagnostics, so it is read off the concrete runtime, not the task surface.
     echo 'the worker is still alive: ',
-        $self->supervisor()?->worker(0)->isAlive() === true ? 'yes' : 'no',
+        $runtime->supervisor()?->worker(0)->isAlive() === true ? 'yes' : 'no',
         PHP_EOL;
 });
 

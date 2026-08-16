@@ -30,14 +30,16 @@ use Lisachenko\SharedData\NotPersistableException;
  *
  * Either way the task itself never travels: only the integer does, on a fixed-size record.
  *
- * # The one-graph-per-class limit of route 2, said out loud
+ * # Route 2 is per instance, and each spawn keeps its memory until teardown
  *
- * The substrate's registry is keyed by **class name**, so persisting a second instance of a class is
- * an upsert that supersedes the first — and superseding a task another worker is still running would
- * release the graph under its feet. This class therefore tracks what is in flight per class and
- * refuses the second concurrent task of one class with the remedy named: publish tasks before the
- * fork, or give the two tasks distinct classes. It is a refusal rather than a silent replacement
- * because the silent version corrupts memory in a process that is not the one making the mistake.
+ * A persisted task is an **instance graph** ({@see SharedArena::persist()} rides the substrate's
+ * `persistInstance()`): its registry entry is named by its own root address, so a second task of
+ * the same class is a second entry, never an upsert — any number of `new RenderJob(...)` are in
+ * flight at once, and none supersedes a graph a worker is still reading. What route 2 costs
+ * instead is arena memory per spawn: an instance graph lives until the family tears down, which
+ * is the arena's ordinary leak-until-teardown economics and is what the watermark soak reports.
+ * A steady-state workload spawning the same tasks forever wants route 1, which allocates nothing
+ * per spawn.
  */
 final class ArenaTaskDirectory implements TaskDirectory
 {
@@ -63,13 +65,6 @@ final class ArenaTaskDirectory implements TaskDirectory
      * @var array<int, int>
      */
     private array $publishedAddresses = [];
-
-    /**
-     * Class name => arena address of the task graph currently in flight under that key.
-     *
-     * @var array<class-string, int>
-     */
-    private array $inFlight = [];
 
     /**
      * Deliberately not 0 and deliberately spaced. A published address is opaque and is never
@@ -112,18 +107,6 @@ final class ArenaTaskDirectory implements TaskDirectory
             return $this->publishedAddresses[$key];
         }
 
-        $class = $task::class;
-
-        if (isset($this->inFlight[$class])) {
-            throw new \LogicException(sprintf(
-                '%s is already running in a worker, and the shared registry is keyed by class: '
-                . 'persisting a second instance of it would release the graph the running worker '
-                . 'is reading. Publish tasks before the fork with register(), or give the two '
-                . 'tasks distinct classes',
-                $class,
-            ));
-        }
-
         try {
             $shared = $this->arena->persist($task);
         } catch (SubstrateRefusal | NotPersistableException $refused) {
@@ -131,16 +114,12 @@ final class ArenaTaskDirectory implements TaskDirectory
                 'the task %s cannot be cloned into the shared arena: %s. A task carries only values '
                 . 'that can cross a worker boundary — scalars, shared objects, SharedArray — and '
                 . 'never a plain array property, a resource or a post-fork closure',
-                $class,
+                $task::class,
                 $refused->getMessage(),
             ), 0, $refused);
         }
 
-        $address = $this->arena->addressOf($shared);
-
-        $this->inFlight[$class] = $address;
-
-        return $address;
+        return $this->arena->addressOf($shared);
     }
 
     public function taskAt(int $address): Task
@@ -160,18 +139,4 @@ final class ArenaTaskDirectory implements TaskDirectory
         ));
     }
 
-    /**
-     * Report that the task under this class has finished, so the key is free again.
-     *
-     * Called by the supervisor when a slot settles. Without it the second spawn of a class would be
-     * refused forever, which is a leak of the refusal rather than of memory.
-     */
-    public function releaseInFlight(int $address): void
-    {
-        foreach ($this->inFlight as $class => $registered) {
-            if ($registered === $address) {
-                unset($this->inFlight[$class]);
-            }
-        }
-    }
 }
