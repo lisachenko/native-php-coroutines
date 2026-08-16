@@ -283,9 +283,9 @@ composer cs:check    # the same, without writing
 composer phpstan     # level max, must be clean
 ```
 
-CI runs **`tests` and `static-analysis` only**, both across PHP 8.4 and 8.5. The coding-standards job
-was deliberately removed: php-cs-fixer is a development tool here, and re-checking on a runner only
-turns a fixable formatting nit into a red build. **Do not re-add it.**
+CI runs **`tests`, `static-analysis` and the bounded `preemption-soak`**, all across PHP 8.4 and 8.5.
+The coding-standards job was deliberately removed: php-cs-fixer is a development tool here, and
+re-checking on a runner only turns a fixable formatting nit into a red build. **Do not re-add it.**
 
 ### A segfault is an engine-level bug, never a flaky test
 
@@ -323,6 +323,7 @@ Not part of `composer test` — these run for a long time and are run deliberate
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-preemption.php --seconds=30
 ```
 
 | Tool | Asserts | Exit codes |
@@ -330,11 +331,20 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | `tools/soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb or growth past the tolerance fails | 0 flat, 1 climbing, 2 inconclusive |
 | `tools/soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
 | `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, process memory stays flat, and no child survives. Leak-until-teardown is the design, so the criterion is a plateau, not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `tools/soak-preemption.php` | a continuous preemptive run of call-free burners, parkers and socket-pair IO: every burner's arithmetic matches the uninterrupted reference, memory stays flat, every coroutine finishes and none is left parked in the interrupt callback, and the process reaches its own verdict instead of a fatal | 0 correct and flat, 1 a check failed, 2 inconclusive — including a run that was never preempted, which measured a cooperative workload |
 
 Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`). Use that
 after changing the detection logic: a detector nobody has seen fail is a detector nobody knows works.
 `soak-arena-watermark.php --self-test` rewrites a shared string property every round, which is the
-substrate's documented per-write arena cost, and must come back FAIL.
+substrate's documented per-write arena cost, and must come back FAIL. `soak-preemption.php
+--self-test` corrupts one burner's sum by a single unit — the smallest wrong answer a lost resume
+could produce — and `--inject-leak` retains a block per round; both must come back FAIL.
+
+**The preemption soak is the exception to "CI runs tests and static-analysis only".** It runs there,
+20 seconds per minor, because its subject is the one thing a two-second test cannot show: the suite's
+longest continuous preemptive run is a few hundred slices, and a resume that loses a partial result
+or a fiber left in the FFI callback is a defect that only surfaces over thousands. Keep it bounded —
+a soak job that grows into minutes is a soak job somebody will delete.
 
 ## Repository map
 
@@ -358,7 +368,8 @@ src/Parallel/Protocol/     Tag, TaggedRecord, Opcode, ControlRecord — the valu
 src/Exception/             the catchable failures, each naming its remedy
 tests/Functional/*.phpt    the suite, one behaviour per file
 tests/Support/             fakes for the unit-shaped tests
-tools/                     soak tooling (memory flatness, process hygiene, arena watermark)
+tools/                     soak tooling (memory flatness, process hygiene, arena watermark,
+                           preemption under a long continuous run)
 spikes/                    the preemption experiments and their verdicts; not run by composer test
 ```
 

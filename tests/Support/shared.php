@@ -26,6 +26,7 @@ declare(strict_types=1);
 namespace Lisachenko\NativePhpCoroutines\Tests\Support;
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
+use Lisachenko\NativePhpCoroutines\Parallel\SharedArena;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
 use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
@@ -350,6 +351,71 @@ final class HoldArenaLockTask implements Task
 
         // Deliberately never unlocked: the supervisor kills this worker, and the next process to
         // take this stripe inherits it as EOWNERDEAD.
+        $deadline = microtime(true) + 30.0;
+
+        while (microtime(true) < $deadline) {
+            usleep(5_000);
+        }
+
+        return 0;
+    }
+}
+
+/**
+ * The address of the result-slot table's own dedicated mutex.
+ *
+ * A stripe lock is the wrong lock to die on if the point is to watch the *supervisor* recover one:
+ * nothing the parent does while burying a worker takes a stripe, and stripe recovery is not tracked
+ * by anything {@see \Lisachenko\NativePhpCoroutines\Parallel\SharedArena::lockRecovered()} can
+ * consult. The lock the supervisor really depends on is the result-slot table's, which every
+ * `refresh()` takes — and which is exactly the lock a worker dying mid-`settle()` would hand on.
+ *
+ * The substrate documents the table header as `capacity | next slot | mutex address | reserved`, so
+ * the mutex address is the third word. Reading it here rather than adding an accessor to the runtime
+ * keeps a test-only need out of production; the containment check turns a future layout change into
+ * a named failure instead of a lock taken on somebody else's bytes.
+ */
+function resultSlotTableMutex(SharedArena $arena): int
+{
+    $raw     = $arena->arena();
+    $address = $raw->readWord($arena->slotTable()->address() + 2 * 8);
+
+    if (!$raw->contains($address, 8)) {
+        throw new \LogicException(
+            'the result-slot table header no longer keeps its mutex address in the third word; '
+            . 'this helper is reading the substrate layout and has to follow it',
+        );
+    }
+
+    return $address;
+}
+
+/**
+ * Takes the result-slot table's lock and never gives it back, so the supervisor recovers it.
+ *
+ * The worker is meant to be SIGKILLed while inside this critical section. Its death makes the very
+ * lock the parent's `refresh()` takes `EOWNERDEAD`, which is the state
+ * {@see \Lisachenko\NativePhpCoroutines\Parallel\WorkerSupervisor} turns into a crash that says the
+ * lock was recovered rather than one that only names the signal.
+ *
+ * A bounded spin, not a park: the process has to still be holding the mutex when it dies.
+ */
+final class HoldResultSlotLockTask implements Task
+{
+    public function run(TaskRuntime $runtime): mixed
+    {
+        // A deliberate downcast, as in HoldArenaLockTask: taking a raw lock in order to die holding
+        // it is machinery the task surface intentionally does not carry.
+        $arena = $runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime ? $runtime->arena() : null;
+
+        if ($arena === null) {
+            throw new \LogicException('this worker has no arena');
+        }
+
+        $arena->arena()->lockMutexAt(resultSlotTableMutex($arena));
+
+        // Never unlocked. Nothing else may run in this worker either — every result-slot operation
+        // would take the lock this fiber is already holding.
         $deadline = microtime(true) + 30.0;
 
         while (microtime(true) < $deadline) {
