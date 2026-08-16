@@ -28,6 +28,7 @@ namespace Lisachenko\NativePhpCoroutines\Tests\Support;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedArena;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
+use Lisachenko\NativePhpCoroutines\StreamPoller;
 use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 /**
@@ -299,6 +300,37 @@ final class PreemptionProbeTask implements Task
         }
 
         return $state->ticksSeenByTheLoop;
+    }
+}
+
+/**
+ * Reports how many times the executing worker's own poller woke while the task did nothing.
+ *
+ * A worker waiting for its next inbox record is the state a pool spends most of its life in, and it
+ * is a *preemptive* idle whenever the pool is: each child arms its own slice timer after the fork.
+ * The count is taken in the worker and returned as an int, because "did the child stop the clock
+ * for its own idle poll?" cannot be observed from the parent — the parent's poller is a different
+ * poller and the child's timer is a different timer.
+ */
+final class ReportsIdlePollerWakeupsTask implements Task
+{
+    public function __construct(private readonly float $seconds = 1.0) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        $poller = $runtime->scheduler()->poller();
+
+        if (!$poller instanceof StreamPoller) {
+            return -1;
+        }
+
+        $before = $poller->wakeups();
+
+        // Nothing else is runnable in this worker, so the whole sleep is spent in one blocking poll
+        // over the control socket and the arena's wake pipe.
+        Coroutine::sleep($this->seconds);
+
+        return $poller->wakeups() - $before;
     }
 }
 

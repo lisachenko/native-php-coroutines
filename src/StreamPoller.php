@@ -46,6 +46,18 @@ final class StreamPoller implements PollerInterface
     /** @var array<int, array{stream: resource, onReadable: \Closure(resource): void}> */
     private array $watches = [];
 
+    /**
+     * How many times a blocking wait in this poller has ended, for any reason.
+     *
+     * A diagnostic, and the only honest way to ask "is this process actually idling?". A signal
+     * that cuts a `stream_select()` short and is retried counts here as its own wakeup, because
+     * from the kernel's point of view that is exactly what it was — the process woke up, did
+     * nothing, and went back to sleep. Counting only the returns of {@see self::poll()} would
+     * report an idle preemptive runtime waking once a second when it is really waking a hundred
+     * times.
+     */
+    private int $wakeups = 0;
+
     public function __construct(private readonly SchedulerInterface $scheduler) {}
 
     public function awaitReadable($stream): void
@@ -150,6 +162,19 @@ final class StreamPoller implements PollerInterface
     public function hasWatches(): bool
     {
         return $this->readWaiters !== [] || $this->writeWaiters !== [] || $this->watches !== [];
+    }
+
+    /**
+     * How many times this poller has come back from a blocking wait.
+     *
+     * One per `stream_select()` return — a readiness, a timeout, or a signal that cut it short and
+     * sent it round the retry — plus one per descriptor-less idle sleep. An idle process should
+     * report roughly one wakeup per thing it is actually waiting for, and a count that scales with
+     * elapsed time instead is the signature of something waking it for nothing.
+     */
+    public function wakeups(): int
+    {
+        return $this->wakeups;
     }
 
     /**
@@ -283,6 +308,8 @@ final class StreamPoller implements PollerInterface
             error_clear_last();
             $count = @stream_select($readSet, $writeSet, $exceptSet, $seconds, $microseconds);
 
+            ++$this->wakeups;
+
             if ($count !== false) {
                 return ['read' => self::readyIds($readSet), 'write' => self::readyIds($writeSet)];
             }
@@ -352,6 +379,8 @@ final class StreamPoller implements PollerInterface
 
         if ($microseconds > 0) {
             usleep($microseconds);
+
+            ++$this->wakeups;
         }
     }
 
