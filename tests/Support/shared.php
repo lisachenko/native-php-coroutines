@@ -161,6 +161,40 @@ final class SharedPanicTask implements Task
     }
 }
 
+/**
+ * Parks briefly on the worker's scheduler, then hands back the string it was built with.
+ *
+ * The payload is the graph: it lives in this task's own arena clone as an arena string, so the
+ * value coming back intact is direct evidence the graph was neither superseded nor released while
+ * a second instance of this same class was persisted and run concurrently. The properties are
+ * public so the spawner can read them back through shared memory while the task is still running.
+ */
+final class NapThenEchoTask implements Task
+{
+    public function __construct(
+        public readonly float $seconds,
+        public readonly string $payload,
+    ) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        Coroutine::sleep($this->seconds);
+
+        return $this->payload;
+    }
+}
+
+/** Panics with the message it was built with, so each instance's panic is distinguishable. */
+final class PanicWithMessageTask implements Task
+{
+    public function __construct(public readonly string $message) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        throw new \RuntimeException($this->message);
+    }
+}
+
 /** Pushes a bounded number of values onto a named shared channel. */
 final class SharedSendTask implements Task
 {

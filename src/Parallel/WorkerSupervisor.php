@@ -63,13 +63,6 @@ final class WorkerSupervisor
     /** @var list<WorkerCrashedException> */
     private array $crashes = [];
 
-    /**
-     * Slot id => the arena address of the task dispatched under it, while it is still in flight.
-     *
-     * @var array<int, int>
-     */
-    private array $dispatched = [];
-
     private readonly SlotTable $slots;
 
     private int $cursor = 0;
@@ -224,8 +217,6 @@ final class WorkerSupervisor
 
         $slot = $this->slots->open($target->id());
 
-        $this->dispatched[$slot->id] = $address;
-
         try {
             $target->dispatch($slot->id, $address);
         } catch (\Throwable $failure) {
@@ -347,7 +338,6 @@ final class WorkerSupervisor
             // makes it a real PHP value rather than something rebuilt from bytes on a socket.
             if ($this->arena !== null) {
                 $this->slots->refresh();
-                $this->releaseTask($record->slotId);
 
                 return;
             }
@@ -369,22 +359,6 @@ final class WorkerSupervisor
         // SPAWN and SHUTDOWN travel the other way; a WAKE or CLOSE that arrives here is a re-check
         // poke the arena's own wake socket already delivered. None is worth taking the parent down
         // over.
-    }
-
-    /** Let the directory reuse a class key once the task under it has finished. */
-    private function releaseTask(int $slotId): void
-    {
-        $address = $this->dispatched[$slotId] ?? null;
-
-        if ($address === null) {
-            return;
-        }
-
-        unset($this->dispatched[$slotId]);
-
-        if ($this->tasks instanceof ArenaTaskDirectory) {
-            $this->tasks->releaseInFlight($address);
-        }
     }
 
     /**

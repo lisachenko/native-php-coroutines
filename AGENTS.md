@@ -226,12 +226,17 @@ in every process.
 - **A shared channel needs capacity ≥ 1.** The substrate's cross-process rendezvous only accepts a
   send while a sibling is parked inside *its* blocking `recv()`, which this runtime never calls.
   Capacity 0 is refused at declaration instead of delivered as a channel that usually does nothing.
-- **The registry is keyed by class**, so `persist()` and the arena route of `ArenaTaskDirectory` hold
-  one live graph per class. A second concurrent task of one class is refused with the remedy named
-  (publish before the fork, or use distinct classes) rather than silently superseding a graph a
-  worker is still reading.
-- **One `SharedError` per store.** A second panic replaces the first, so `ParallelTaskException`
-  promises the panic it was handed and not a history of them.
+- **Graphs are keyed per instance, and each unpublished spawn keeps its memory until teardown.**
+  The substrate registers a persisted graph under a name minted from its own root address
+  (`persistInstance()`), so any number of tasks of one class are in flight at once and none
+  supersedes a graph a worker is still reading; shared *roots* are filed under the name they were
+  declared with, so one class serves many roots. The cost sits where the arena's economics already
+  are: every `spawnParallel()` of an unpublished task clones its graph into the arena and that
+  memory lives until the family tears down — a steady-state workload publishes its tasks before
+  the fork, which allocates nothing per spawn.
+- **One `SharedError` per panic.** Each capture is its own instance graph, so two workers failing
+  near-simultaneously each leave an error their waiter can still attach by the address its own
+  slot carries.
 - **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
   supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
   assumes.
