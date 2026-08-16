@@ -475,8 +475,10 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   `finally` blocks do not run — exactly as a goroutine's deferred calls do not run when `main`
   returns.
 - **An uncaught throwable is a panic**: it ends the run and comes back out of `Runtime::run()`.
-- **Sharing is fork-only.** Shared objects are valid because children inherit an identical address
-  layout; there is no attach-by-key across unrelated processes.
+- **Every participant must see the arena at the same address**, and must agree on the engine pointers
+  inside shared structs (class entries, object handlers) — an address is the value, so both have to
+  hold for a shared object to mean the same thing twice. Forked workers get both for free, which is
+  how the runtime works today; it is a requirement, not a restriction to forking forever.
 - **Plain arrays are not shareable.** Use `SharedArray`; a plain array grows into the private heap of
   whichever process filled it. Closures are shareable only by **pre-fork registration**
   (`registerSharedClosure()`); work created after the fork travels as a `Task`. Anything else throws

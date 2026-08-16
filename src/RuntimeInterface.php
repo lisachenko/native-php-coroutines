@@ -27,8 +27,10 @@ interface RuntimeInterface
     /**
      * Declare a named shared root, to be created **before** the workers fork.
      *
-     * Fork is what makes sharing sound: children inherit an identical address layout, so a root
-     * created before the fork is valid at the same address in every process. Declaring a root after
+     * A root is addressed, not named, once it is in the arena, so it is only usable by a process
+     * that sees it at the same virtual address. Forking is how this runtime arranges that today: a
+     * child inherits the parent's mappings, so a root created before the fork is at the same address
+     * everywhere, and one created afterwards exists in a single process. Declaring a root after
      * {@see self::run()} has forked is therefore an error, not a late binding.
      *
      * @param class-string $class Shared type to instantiate, e.g. SharedArray or SharedChannel.
