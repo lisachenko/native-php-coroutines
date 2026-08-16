@@ -407,10 +407,9 @@ final class SharedArena
     /**
      * Clone an object graph into the arena and hand back the shared instance.
      *
-     * Storage is keyed by class, which is the substrate's registry contract: persisting a second
-     * instance of the same class is an **upsert** that supersedes the first. A design that needs
-     * several live graphs of one class gives them distinct classes, or puts them in a
-     * `SharedArray`.
+     * Storage is keyed per instance: the substrate registers the graph under a name minted from
+     * its own root address, so persisting a second instance of the same class is a second entry —
+     * never an upsert — and any number of graphs of one class are live at once.
      *
      * The graph is persisted `mutable: true`, so a worker's writes are visible to the family
      * instead of being rolled back at request end. A bare `$object->prop = …` on the result is
