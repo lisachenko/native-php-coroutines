@@ -133,6 +133,18 @@ The mechanism was selected by experiment, and the negative result is the load-be
   preemption did not ask to be interrupted and has no handler expecting it.
 - **The scheduler must hold a strong reference to every preempted fiber and drain them before
   shutdown.** Dropping one is fatal, and uninstalling the hook first does not help.
+- **The drain is bounded, and giving up on a coroutine is not letting go of it.** A coroutine with
+  no cooperative point at all is never drained, so `Scheduler::drainPreempted()` spends a budget
+  (64 resumes per coroutine, one second of wall clock per attempt, at least one resume each) and
+  then *reports* rather than spins. The straggler stays owned by the scheduler for the rest of the
+  process; the run raises `UndrainableCoroutineException` naming it and its spawn site, and the
+  preemptor ends the process with `posix_kill(self, SIGKILL)` from a shutdown function it registers
+  during shutdown, so every other shutdown function still runs first. **`exit()` is not an
+  alternative** — spike S7 measured it exiting 255 on the engine's fatal, because it still runs
+  request shutdown, which is where the fiber is destroyed.
+- **A drain may only resume while the slice timer is live.** A resume returns because the next tick
+  takes the CPU back, not because the coroutine hands it over. Draining with the clock disarmed is
+  the unbounded wait again, one step further along.
 - **Each forked worker re-arms its own timer** — `setitimer` intervals are cleared in the child.
 - **10 ms is a target, not a guarantee.** A single internal opcode is not interruptible: `sort()`
   over 4M ints delayed preemption by 1.6–2.0 s. Never document or assume a bounded slice; document
