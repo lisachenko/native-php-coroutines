@@ -91,5 +91,5 @@ echo 'children left: ', parallelChildrenLeft(), PHP_EOL;
 --EXPECT--
 the worker holds the result-slot lock: yes
 the worker is gone before the parent reads a slot: yes
-worker #0 died: it died holding an arena lock (EOWNERDEAD); the lock was recovered, but whatever it was writing is not an answer; 1 result slot(s) can never complete: #0
+worker #0 died: it died holding an arena lock (EOWNERDEAD); the lock was recovered, but whatever it was writing is not an answer; 1 result slot(s) can never complete: #0/gen1
 children left: none
