@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace Lisachenko\NativePhpCoroutines;
 
 use Lisachenko\NativePhpCoroutines\Exception\NotShareableValueException;
+use Lisachenko\NativePhpCoroutines\Exception\UndrainableCoroutineException;
 use Lisachenko\NativePhpCoroutines\Parallel\ArenaTaskDirectory;
 use Lisachenko\NativePhpCoroutines\Parallel\JoinHandle;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedArena;
@@ -100,6 +101,13 @@ final class Runtime implements TaskRuntime
      *                                     a forked worker's runtime binds the mapping it inherited;
      *                                     application code leaves it null.
      * @param int              $arenaSize  Bytes the whole family shares, when this runtime creates it.
+     * @param int              $slots      Result slots the family shares. One is taken per
+     *                                     `spawnParallel()` and given back when its handle is
+     *                                     awaited, so this sizes **concurrency**, not throughput:
+     *                                     it has to cover the tasks in flight at once plus any slot
+     *                                     held open by a handle nobody awaits. Pre-sized in the
+     *                                     arena before the fork and never grown; exhausting it is a
+     *                                     typed refusal naming the knob, never corruption.
      */
     public function __construct(
         private readonly int $workers = 0,
@@ -107,6 +115,7 @@ final class Runtime implements TaskRuntime
         private readonly float $slice = Preemptor::DEFAULT_SLICE_SECONDS,
         ?SharedArena $arena = null,
         int $arenaSize = SharedArena::DEFAULT_SIZE,
+        int $slots = SharedArena::DEFAULT_SLOT_COUNT,
     ) {
         if ($workers < 0) {
             throw new \InvalidArgumentException(
@@ -121,7 +130,9 @@ final class Runtime implements TaskRuntime
 
         // Created here and nowhere later: everything the family shares has to exist before the first
         // fork, and run() forks before it spawns anything.
-        $this->arena = $arena ?? ($workers > 0 ? new SharedArena($arenaSize, max(32, $workers + 8)) : null);
+        $this->arena = $arena ?? ($workers > 0
+            ? new SharedArena($arenaSize, max(32, $workers + 8), $slots)
+            : null);
 
         if ($this->arena === null) {
             $this->supervisor = null;
@@ -240,6 +251,15 @@ final class Runtime implements TaskRuntime
         );
     }
 
+    /**
+     * Take a handle on a slot some other process opened, by its id.
+     *
+     * A slot id is a **ticket**: the slot index and the generation it was handed out in. Slots are
+     * recycled, so an id kept past the moment its owner released it names a record that belongs to
+     * another task now, and attaching to it is refused by the substrate — with the slot and both
+     * generations named — rather than answered with that task's result. Hold an id only for as long
+     * as the result it names.
+     */
     public function attachResult(int $slotId): JoinHandleInterface
     {
         $slots = $this->slots ?? throw new \LogicException(
@@ -263,7 +283,16 @@ final class Runtime implements TaskRuntime
      * it loses are the ones that are bugs from inside a run anyway — a nested `run()`, a shared
      * root declared where only one process would see it.
      *
+     * A coroutine that was preempted and then never reached a safe point is the one thing this call
+     * cannot simply discard: its fiber is suspended inside the interrupt callback, where it may not
+     * be released. The drain is bounded, so the run ends rather than hanging, and what it could not
+     * drain comes back as {@see UndrainableCoroutineException} naming the coroutine and the line
+     * that spawned it. A panic keeps precedence — it is the bug the program actually has — and the
+     * straggler is reported on STDERR by the preemptor's shutdown handler in that case, which also
+     * ends the process before the engine can destroy the fiber.
+     *
      * @param \Closure(TaskRuntime): mixed $main
+     * @throws UndrainableCoroutineException
      */
     public function run(\Closure $main): void
     {
@@ -284,6 +313,14 @@ final class Runtime implements TaskRuntime
             // suspended inside that callback is fatal at shutdown, not merely leaked.
             $this->preemptor?->disarm();
             $this->supervisor?->shutdown();
+        }
+
+        // Reached only when the run itself did not throw: a panic is the more informative failure
+        // and keeps the caller's attention, and the straggler is reported at shutdown either way.
+        $stragglers = $this->scheduler->undrainableCoroutines();
+
+        if ($stragglers !== []) {
+            throw new UndrainableCoroutineException($stragglers);
         }
     }
 

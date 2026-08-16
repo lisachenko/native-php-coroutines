@@ -12,12 +12,18 @@ declare(strict_types=1);
 
 namespace Lisachenko\NativePhpCoroutines\Exception;
 
+use Lisachenko\SharedData\Ipc\SlotTicket;
+
 /**
  * A worker died without completing the work it had been given.
  *
  * Raised in whichever process was waiting, and deliberately loud: the alternative to an exception
  * here is a coroutine parked forever on a result slot that nobody will ever fill. Any slots the
  * dead worker owned are named, so a caller can tell exactly which results are lost.
+ *
+ * A slot is named by its **ticket** — index and generation — because that is what a slot id is once
+ * slots are recycled. `#7/gen3` is a different claim from `#7/gen4`, and a report that printed only
+ * the index would point at whichever task holds the record now.
  */
 final class WorkerCrashedException extends \RuntimeException implements CoroutineException
 {
@@ -34,7 +40,7 @@ final class WorkerCrashedException extends \RuntimeException implements Coroutin
             $message .= sprintf(
                 '; %d result slot(s) can never complete: %s',
                 count($abandonedSlots),
-                implode(', ', array_map(static fn(int $slot): string => '#' . $slot, $abandonedSlots)),
+                implode(', ', array_map(self::nameSlot(...), $abandonedSlots)),
             );
         }
 
@@ -65,5 +71,18 @@ final class WorkerCrashedException extends \RuntimeException implements Coroutin
     public static function notRunning(int $workerId): self
     {
         return new self($workerId, 'the worker is not running');
+    }
+
+    /**
+     * How one lost slot is spelled in the message.
+     *
+     * A shared slot id is a ticket and always carries a non-zero generation, because generation 0
+     * is deliberately no slot at all. A runtime with no arena numbers its slots itself and has no
+     * generations to report, so those keep the plain `#7` they always had rather than growing a
+     * `/gen0` that would mean nothing.
+     */
+    private static function nameSlot(int $slot): string
+    {
+        return SlotTicket::generationOf($slot) === 0 ? '#' . $slot : SlotTicket::describe($slot);
     }
 }
