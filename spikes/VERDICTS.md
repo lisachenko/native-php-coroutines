@@ -26,8 +26,15 @@ z-engine resolved per minor, exactly as the dependency policy requires:
 | **S4** interrupt density in call-free loops | no shape unbounded; worst non-allocating 92 µs | no shape unbounded; worst non-allocating 195 µs | **GREEN** (hard caveat: allocation + single opcodes) |
 | **S5** never `Fiber::throw()` into a preempt-suspended fiber | cancellation silently lost / fatal | cancellation silently lost / fatal | **GREEN** — hazard established |
 | **S6** suspended-fiber GC | 0 B/fiber leak; destroying a preempted fiber is **fatal** | 0 B/fiber leak; destroying a preempted fiber is **fatal** | **GREEN** — with a hard shutdown obligation |
+| **S7** endings available with an undrainable fiber alive | every shutdown path fatals; a self-directed signal does not | *not measured — see below* | **GREEN** on 8.4 |
 
 Nothing was BLOCKED: both z-engine lines installed successfully, so S2 was fully exercised.
+
+S1–S6 were run on both minors. **S7 was added later, from a session with a single vendor tree
+resolved by 8.4**, and its 8.5 column is therefore empty rather than assumed: it re-measures S6's
+fatal (identical on both minors there) and adds only which *endings* avoid it, which is a property of
+`fork`/`signal` semantics rather than of an engine offset. Re-run it on 8.5 with the `ze85` tree from
+[`README.md`](README.md) before treating the 8.5 column as known.
 
 ---
 
@@ -237,6 +244,43 @@ is inside the FFI callback, and the unwind is a non-`Throwable` engine sentinel 
 the mandatory `catch (\Throwable)` cannot stop it. Uninstalling the hook does not help — the
 suspended fiber's *saved stack* still contains the ext-ffi trampoline frame.
 
+## S7 — endings available to a process holding an undrainable fiber
+
+> S6 says the drain is the only way out and issue #18 says the drain can never finish for
+> `while (true) { $x++; }`. Bounding it means deciding to stop while a fiber is still suspended in
+> the callback. What endings does the process have from there, and does any of them reach the end
+> without the engine destroying that fiber?
+
+**GREEN on 8.4 — exactly one family of endings avoids the fatal, and it is a signal.**
+
+Each row is a subprocess that preempt-suspends `while (true) { $x++; }` at a 2 ms slice, stops the
+timer, and then ends the way the row names (`raw/s7_php84.txt`):
+
+| ending | exit | S6 fatal? | output kept? |
+|--------|-----:|-----------|--------------|
+| let the script end with the fiber alive | 255 | **yes** | yes, then the fatal |
+| uninstall the interrupt hook first, then end | 255 | **yes** | yes, then the fatal |
+| `exit(70)` | **255**, not 70 | **yes** | yes, then the fatal |
+| `posix_kill(self, SIGTERM)` | 143 (signal 15) | no | yes, both streams |
+| `posix_kill(self, SIGKILL)` | 137 (signal 9) | no | yes, both streams |
+| kill from a shutdown function registered *during* shutdown | 137 (signal 9) | no | yes, and every earlier shutdown function ran first |
+| control: drain the fiber, then end normally | 0 | no | drained in **6 resumes** (2 M iterations at a 2 ms slice) |
+
+Three things this settles for the bounded drain:
+
+1. **`exit()` is not an escape.** It runs request shutdown, which is where the fiber is destroyed —
+   the process ends on the engine's fatal at 255 rather than on the code it was given.
+2. **A signal to self is.** The process ends where it stands, nothing is destructed, and everything
+   already written to stdout *and* stderr is kept — so the diagnosis survives the ending that
+   delivers it. `SIGKILL` over `SIGTERM` because a handleable signal can be handled by the
+   application, and this one may not be declined.
+3. **The kill can be deferred to the very last shutdown function.** Registering from inside a
+   shutdown function appends to the queue, so the runtime's ending does not swallow the
+   application's own shutdown work.
+
+The control row is also where the drain budget's size comes from: a coroutine that *does* finish
+needs a handful of resumes, not dozens.
+
 ---
 
 # Recommended preemption mechanism
@@ -305,6 +349,15 @@ is **not** covered here.
 - **Register a shutdown drain.** `register_shutdown_function()` runs early enough to drain
   preempted fibers safely (verified). Every preempted coroutine must be drained there before
   the engine destroys it.
+- **Bound the drain, and end the process yourself when it runs out.** A coroutine with no
+  cooperative point is never drained, so an unbounded drain is a hang. Stopping is safe only
+  because stopping is not releasing: the scheduler keeps holding the fiber, and the runtime ends
+  the process with `posix_kill(self, SIGKILL)` from a shutdown function registered during
+  shutdown. `exit()` is not an alternative — S7 measured it exiting **255 on the engine's fatal**,
+  not on the status it was given.
+- **A drain may only resume while the slice timer is live.** The resume returns because the next
+  tick takes the CPU back, not because the coroutine hands it over; draining with the timer
+  disarmed is the same unbounded wait in a different place.
 - **Cooperatively suspended fibers need no drain for memory.** 10 000 create/suspend/abandon
   cycles leak 0.00 B/fiber (`memory_get_usage(true)`), every destructor runs and every `finally`
   runs. The drain obligation is about the preempt path only.
