@@ -10,7 +10,7 @@ error_reporting=E_ALL & ~E_DEPRECATED
 declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\PreemptionProbeTask;
 use Lisachenko\NativePhpCoroutines\Timer;
 
@@ -33,7 +33,7 @@ $runtime = new Runtime(workers: 1, preemptive: true, arenaSize: 32 << 20);
 $probe = new PreemptionProbeTask();
 $runtime->publishTask($probe);
 
-$runtime->run(static function (RuntimeInterface $self) use ($probe): void {
+$runtime->run(static function (TaskRuntime $self) use ($probe): void {
     Timer::after(45.0, static function (): void {
         throw new RuntimeException('deadline: the worker never answered the preemption probe');
     });

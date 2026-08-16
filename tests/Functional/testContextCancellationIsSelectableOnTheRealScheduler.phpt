@@ -13,7 +13,7 @@ use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Context;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Select;
 
 include __DIR__ . '/../../vendor/autoload.php';
@@ -21,7 +21,7 @@ include __DIR__ . '/../../vendor/autoload.php';
 // Cancellation is a closing channel, which is the whole reason it composes with
 // select for free: the worker below selects over real work and its own done()
 // channel without either side knowing about the other.
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $scheduler = $runtime->scheduler();
 
     $parent = Context::withCancel($scheduler);

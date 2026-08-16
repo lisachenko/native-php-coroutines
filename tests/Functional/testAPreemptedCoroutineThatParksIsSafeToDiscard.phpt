@@ -12,7 +12,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 include __DIR__ . '/../../vendor/autoload.php';
 
@@ -32,7 +32,7 @@ register_shutdown_function(static function (): void {
 
 $runtime = new Runtime(preemptive: true);
 
-$runtime->run(static function (RuntimeInterface $self) use ($state): void {
+$runtime->run(static function (TaskRuntime $self) use ($state): void {
     $silence = new Channel($self->scheduler());
 
     // Kept so the assertion below can look at the channel itself once the run is over. Whether

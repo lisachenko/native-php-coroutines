@@ -13,7 +13,7 @@ use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Select;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedSendTask;
 use Lisachenko\NativePhpCoroutines\Timer;
@@ -30,7 +30,7 @@ $runtime->declareShared('jobs', SharedChannel::class, 8);
 $producer = new SharedSendTask('jobs', 3, 'job-');
 $runtime->publishTask($producer);
 
-$runtime->run(static function (RuntimeInterface $self) use ($producer): void {
+$runtime->run(static function (TaskRuntime $self) use ($producer): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the select never resolved four times');
     });

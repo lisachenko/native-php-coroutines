@@ -50,9 +50,9 @@ use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Io;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
 use Lisachenko\NativePhpCoroutines\Select;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -103,7 +103,7 @@ function soakRound(int $coroutines): void
 
     $runtime = new Runtime();
 
-    $runtime->run(static function (RuntimeInterface $runtime) use ($coroutines, $writeEnd, $readEnd): void {
+    $runtime->run(static function (TaskRuntime $runtime) use ($coroutines, $writeEnd, $readEnd): void {
         $scheduler = $runtime->scheduler();
 
         $jobs    = new Channel($scheduler);

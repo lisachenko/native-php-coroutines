@@ -12,7 +12,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 include __DIR__ . '/../../vendor/autoload.php';
 
@@ -27,7 +27,7 @@ include __DIR__ . '/../../vendor/autoload.php';
 // and only then parks, there being no waiting receiver for it. That is why the
 // output is not a strict send/recv ping-pong: a rendezvous send blocks until a
 // receiver is ready, and here the first one already was.
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $channel = new Channel($runtime->scheduler(), capacity: 0);
 
     Coroutine::spawn(function () use ($channel): void {

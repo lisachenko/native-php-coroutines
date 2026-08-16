@@ -10,7 +10,7 @@ error_reporting=E_ALL & ~E_DEPRECATED
 declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SettleSlotsTask;
 use Lisachenko\NativePhpCoroutines\Timer;
 
@@ -35,7 +35,7 @@ const SLOTS = 24;
 
 $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 
-$runtime->run(static function (RuntimeInterface $self): void {
+$runtime->run(static function (TaskRuntime $self): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the slots were never all settled');
     });

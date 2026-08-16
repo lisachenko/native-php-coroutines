@@ -12,7 +12,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Select;
 
 include __DIR__ . '/../../vendor/autoload.php';
@@ -21,7 +21,7 @@ include __DIR__ . '/../../vendor/autoload.php';
 // channels and stay parked while the scheduler idles on its timer heap. The
 // winning send then has to reach it through the real unpark path, and the losing
 // channel must be unlinked rather than left holding a stale waiter.
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $scheduler = $runtime->scheduler();
 
     $fast = new Channel($scheduler, capacity: 1);

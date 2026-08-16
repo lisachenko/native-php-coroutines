@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedCounter;
 
 use function Lisachenko\NativePhpCoroutines\Tests\Support\parallelChildrenLeft;
@@ -36,7 +36,7 @@ try {
     echo $refusal->getMessage(), PHP_EOL;
 }
 
-$runtime->run(static function (RuntimeInterface $self): void {
+$runtime->run(static function (TaskRuntime $self): void {
     // After the fork the workers already exist, so a root created now lives in this process alone.
     // That is not a late binding, and it is refused rather than silently made useless.
     try {

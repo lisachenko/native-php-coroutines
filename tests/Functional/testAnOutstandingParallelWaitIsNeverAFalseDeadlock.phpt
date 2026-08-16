@@ -12,7 +12,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedSendTask;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SleepingTask;
@@ -37,7 +37,7 @@ $producer = new SharedSendTask('jobs', 1, 'late-');
 $runtime->publishTask($slow);
 $runtime->publishTask($producer);
 
-$runtime->run(static function (RuntimeInterface $self) use ($slow, $producer): void {
+$runtime->run(static function (TaskRuntime $self) use ($slow, $producer): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the parallel waits never completed');
     });

@@ -22,6 +22,7 @@ use Lisachenko\NativePhpCoroutines\Parallel\WorkerSupervisor;
 use Lisachenko\NativePhpCoroutines\Preemption\Preemptor;
 use Lisachenko\SharedData\Ipc\NotShareableValueException as SubstrateRefusal;
 use Lisachenko\SharedData\NotPersistableException;
+use Lisachenko\SharedData\SharedObjectHandle;
 
 /**
  * The composition root of a process: Layer 1, Layer 2 and the parallel layer.
@@ -63,8 +64,17 @@ use Lisachenko\SharedData\NotPersistableException;
  * queued, sleeping or parked on the poller are **discarded**, not awaited — a program that wants to
  * wait for its workers says so with a WaitGroup or a channel. An uncaught Throwable anywhere is a
  * panic: it ends the run and comes back out of `run()`.
+ *
+ * # Two audiences, one line between them
+ *
+ * {@see TaskRuntime} is the execution surface — what the main closure and every parallel task is
+ * handed, in whichever process it runs. Everything on this class beyond that interface is pre-fork
+ * configuration ({@see self::declareShared()}, {@see self::registerSharedClosure()},
+ * {@see self::publishTask()}), lifecycle ({@see self::run()}) or diagnostics ({@see self::arena()},
+ * {@see self::supervisor()}, {@see self::workers()}) — reachable only through the concrete type,
+ * which only the code that constructed the runtime holds.
  */
-final class Runtime implements RuntimeInterface
+final class Runtime implements TaskRuntime
 {
     private readonly Scheduler $scheduler;
 
@@ -130,6 +140,19 @@ final class Runtime implements RuntimeInterface
             : null;
     }
 
+    /**
+     * Declare a named shared root, to be created **before** the workers fork.
+     *
+     * A root is addressed, not named, once it is in the arena, so it is only usable by a process
+     * that sees it at the same virtual address. Forking is how this runtime arranges that today: a
+     * child inherits the parent's mappings, so a root created before the fork is at the same address
+     * everywhere, and one created afterwards exists in a single process. Declaring a root after
+     * {@see self::run()} has forked is therefore an error, not a late binding — which is also why
+     * this method is not on {@see TaskRuntime}: by the time any code holds that type, the fork is
+     * behind it.
+     *
+     * @param class-string $class Shared type to instantiate, e.g. SharedArray or SharedChannel.
+     */
     public function declareShared(string $name, string $class, int $capacity = 0): void
     {
         $this->requireArena('shared roots need')->declareShared($name, $class, $capacity);
@@ -157,6 +180,11 @@ final class Runtime implements RuntimeInterface
         }
     }
 
+    public function mutableHandle(object|int $shared): SharedObjectHandle
+    {
+        return $this->requireArena('mutating shared objects needs')->store()->mutableHandle($shared);
+    }
+
     /**
      * Make a closure shareable, by provenance — it must be compiled before the fork.
      *
@@ -170,12 +198,6 @@ final class Runtime implements RuntimeInterface
         $this->requireArena('shared closures need')->registerSharedClosure($name, $closure);
     }
 
-    /**
-     * The closure registered under this name, resolved in whichever process asks.
-     *
-     * The record lives in the arena and the closure object lives wherever it was compiled — which,
-     * for a pre-fork registration, is the same address in every worker of the family.
-     */
     public function sharedClosure(string $name): \Closure
     {
         return $this->requireArena('shared closures need')->closures()->closure($name);
@@ -229,6 +251,20 @@ final class Runtime implements RuntimeInterface
         return new JoinHandle($slots, $this->scheduler, $slot->id, $slot->workerId);
     }
 
+    /**
+     * Run the main coroutine to completion.
+     *
+     * Go semantics: when main returns, coroutines that are still pending are **discarded**, not
+     * awaited. An uncaught Throwable anywhere is a panic — it terminates the run and is rethrown
+     * out of this call.
+     *
+     * The closure receives {@see TaskRuntime}, not this class: main runs after the fork, in
+     * exactly the regime a parallel task runs in, so it gets exactly the task surface. The methods
+     * it loses are the ones that are bugs from inside a run anyway — a nested `run()`, a shared
+     * root declared where only one process would see it.
+     *
+     * @param \Closure(TaskRuntime): mixed $main
+     */
     public function run(\Closure $main): void
     {
         $this->preemptor?->arm();
@@ -262,22 +298,23 @@ final class Runtime implements RuntimeInterface
         return $this->workers;
     }
 
-    /** Whether this runtime forces time slices on its coroutines. */
+    /** Whether this process's coroutines can lose the CPU without yielding. */
     public function isPreemptive(): bool
     {
-        return $this->preemptive;
+        return $this->scheduler->preemptor() !== null;
     }
 
     /**
-     * The preemptor, or null on a cooperative runtime.
+     * The preemptor driving this process, or null when it runs cooperatively.
      *
-     * This is the handle application code needs for
-     * {@see Preemptor::enterCriticalSection()}/{@see Preemptor::leaveCriticalSection()} — the only
-     * way to mark a stretch of code that must not lose the CPU halfway through.
+     * Deliberately read from the scheduler rather than from the constructor state: in a forked
+     * worker the preemptor is built after the fork, against the child's own scheduler, and attached
+     * there by the second seam — the runtime object's own field never sees it. The scheduler is the
+     * one place the binding is truthful in every process of the family.
      */
     public function preemptor(): ?Preemptor
     {
-        return $this->preemptor;
+        return $this->scheduler->preemptor();
     }
 
     /** The shared memory of this family, or null on a single-process runtime. */

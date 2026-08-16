@@ -10,7 +10,7 @@ error_reporting=E_ALL & ~E_DEPRECATED
 declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\EchoTask;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedCounter;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedRootTask;
@@ -46,7 +46,7 @@ foreach ($tasks as $task) {
     $runtime->publishTask($task);
 }
 
-$runtime->run(static function (RuntimeInterface $self) use ($tasks, $shared): void {
+$runtime->run(static function (TaskRuntime $self) use ($tasks, $shared): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: a tag never came back');
     });

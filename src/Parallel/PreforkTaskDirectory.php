@@ -29,7 +29,7 @@ namespace Lisachenko\NativePhpCoroutines\Parallel;
  * placeholder for it.
  *
  * Replacing this with the arena implementation means: {@see self::addressOf()} calls
- * `RuntimeInterface::persist()` and returns the shared address; {@see self::taskAt()} attaches the
+ * `TaskRuntime::persist()` and returns the shared address; {@see self::taskAt()} attaches the
  * shared object at that address. Nothing else in this package changes.
  */
 final class PreforkTaskDirectory implements TaskDirectory
