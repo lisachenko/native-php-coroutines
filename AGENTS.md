@@ -134,6 +134,16 @@ The mechanism was selected by experiment, and the negative result is the load-be
 - **The scheduler must hold a strong reference to every preempted fiber and drain them before
   shutdown.** Dropping one is fatal, and uninstalling the hook first does not help.
 - **Each forked worker re-arms its own timer** — `setitimer` intervals are cleared in the child.
+- **The clock is stopped for the idle poll, and the re-arm is a `finally`.** A free-running 10 ms
+  timer wakes an idle preemptive process ~100 times a second to preempt nobody, so
+  `Scheduler::pollIdle()` brackets the one blocking call with `Preemptor::pauseSlicing()` and
+  `resumeSlicing()`. Two conditions make that safe and neither is negotiable: **idle means the
+  poller is about to block**, never "the run queue looks empty" — a coroutine about to run must
+  still be sliceable — and the re-arm lives in a `finally` spanning the whole `poll()`, so no way
+  out of it (a readiness, a timeout, the EINTR retry the poller does internally, a throw) can leave
+  the process silently cooperative. Pausing is not disarming: the hook stays installed, SIGALRM
+  stays ours, and `isArmed()` goes on saying yes. A missed re-arm reports nothing and fails nowhere,
+  which is why it is structural rather than careful.
 - **10 ms is a target, not a guarantee.** A single internal opcode is not interruptible: `sort()`
   over 4M ints delayed preemption by 1.6–2.0 s. Never document or assume a bounded slice; document
   the caveat with it.
