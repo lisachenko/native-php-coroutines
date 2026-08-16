@@ -239,9 +239,28 @@ in every process.
   slot carries. A panic slot whose payload does not attach as a `SharedError` still surfaces as a
   `ParallelTaskException` — one that says the detail is unavailable, never one that presents
   another object's fields as this task's failure.
-- **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
-  supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
-  assumes.
+- **Result slots are a bounded supply that circulates.** The table is pre-sized in the arena before
+  the fork and never grows, but a slot goes back on the substrate's free list once its `JoinHandle`
+  has taken the answer, so the supply limits **concurrency**, not throughput. Two kinds do not come
+  back: a handle nobody awaits (nothing has read it, so nothing can say it is safe) and a slot whose
+  worker died before settling it (still pending in shared memory, and a zombie worker may yet write
+  to it — recycling it would let that write land on another task). `soak-arena-watermark.php` reports
+  the high-water mark and requires it to plateau exactly.
+- **A slot id is a ticket, not an index**, and the difference is a safety property. Index and
+  generation are packed into the 32 bits a wake event carries, the generation moves the moment the
+  owner releases the slot, and every substrate verb refuses a mismatch by name. Keep an id only for
+  as long as the result it names: `attachResult()` on a released id throws, which is the design
+  working, not a race. Releasing is the **owner's** job — the process that spawned the task — so a
+  second process that attaches to somebody else's slot has to finish reading before the owner's
+  `await()` returns.
+- **Capture, then release.** `SlotTable::settle()` is the only place this package reads a shared
+  slot record, and it copies the whole outcome — the decoded value, or a `ParallelTaskException`
+  built from the shared error object's named properties — into per-process state before returning.
+  Nothing may add a reader of the shared record after that point; `refresh()` skips locally complete
+  slots for exactly this reason. What came *out* of the record stays valid regardless: an `OBJ` or
+  `STR` answer is an arena address and the arena frees nothing, so releasing a slot returns the slot
+  record and never the memory the answer lives in. Error graphs are not reclaimed at all — a child
+  may never free arena memory — and stay leak-until-teardown on purpose.
 
 ## Environment
 
@@ -329,12 +348,18 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | --- | --- | --- |
 | `tools/soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb or growth past the tolerance fails | 0 flat, 1 climbing, 2 inconclusive |
 | `tools/soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
-| `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, process memory stays flat, and no child survives. Leak-until-teardown is the design, so the criterion is a plateau, not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, **result-slot consumption plateaus exactly**, process memory stays flat, and no child survives. Leak-until-teardown is the design for bytes, so their criterion is a plateau rather than zero growth; a slot is either handed back or it is not, so its criterion has no tolerance at all | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
 
-Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`). Use that
-after changing the detection logic: a detector nobody has seen fail is a detector nobody knows works.
-`soak-arena-watermark.php --self-test` rewrites a shared string property every round, which is the
-substrate's documented per-write arena cost, and must come back FAIL.
+The watermark soak runs on a deliberately small slot table (`--slots=64`, far fewer than the run
+spawns), because a table big enough to absorb the whole run would prove nothing about slots coming
+back.
+
+Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`,
+`--leak-slots`). Use that after changing the detection logic: a detector nobody has seen fail is a
+detector nobody knows works. `soak-arena-watermark.php --self-test` rewrites a shared string property
+every round, which is the substrate's documented per-write arena cost, and must come back FAIL;
+`--leak-slots` takes a slot every round without giving it back and must fail on the **slot** series
+with the byte series still flat.
 
 ## Repository map
 

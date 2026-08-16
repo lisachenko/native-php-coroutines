@@ -437,7 +437,9 @@ $runtime->run(function (TaskRuntime $runtime) use ($task, $report): void {
 - **`spawnParallel()` returns a `JoinHandle`.** `await()` parks the calling coroutine on the poller,
   wakes on the settled slot and reads the value **straight out of shared memory**. A slot that is
   already settled returns without parking, and a slot may be awaited from any process of the family —
-  `attachResult($slotId)` is the handle for that.
+  `attachResult($slotId)` is the handle for that. `await()` also gives the slot back (see
+  [the slot budget](#the-result-slot-budget)), so the id it was awaited on stops naming this result:
+  keep the value, not the id.
 - **A `SharedChannel` is a `ChannelInterface`**, so it drops into `Select` next to a local `Channel`
   and one `select` statement can mix the two. Its `readinessFd()` is the arena's wake socket, which
   the poller drains on every readiness — level-triggered pokes, so an undrained pipe would spin.
@@ -450,6 +452,54 @@ $runtime->run(function (TaskRuntime $runtime) use ($task, $report): void {
 - **Closures cross only by provenance.** `registerSharedClosure($name, $closure)` before the fork
   makes one shareable for the life of the family; a closure created afterwards is refused, because no
   inspection can tell it apart from a stale address holding a different, perfectly valid `Closure`.
+
+### The result-slot budget
+
+Every `spawnParallel()` takes **one result slot** out of a table that lives in the arena. The table
+is pre-sized before the fork and cannot grow — the engine would move a growing shared structure into
+one worker's private heap and leave its siblings reading garbage — so the supply is fixed for the
+life of the family:
+
+```php
+$runtime = new Runtime(
+    workers: 4,
+    arenaSize: 64 << 20,   // bytes the whole family shares
+    slots: 4096,           // result slots, the default
+);
+```
+
+**It is a limit on concurrency, not on throughput.** A slot goes back on the substrate's free list
+as soon as its `JoinHandle` has taken the answer, so a pool doing millions of spawns needs only as
+many slots as it has results *in flight at once*:
+
+| What the workload does | Slots it needs |
+| --- | --- |
+| spawn, `await()`, repeat | 1 |
+| spawn N, then await all N | N |
+| a pool of W workers kept saturated | ≈ W, plus whatever is queued ahead of them |
+| a handle that is spawned and never awaited | 1, for the rest of the run |
+| a task whose worker died before settling | 1, for the rest of the run |
+
+The last two are the ones that actually consume the budget. A handle nobody awaits has never had its
+answer read, so nothing can say the slot is safe to reuse; a slot whose worker was killed mid-task is
+still *pending* in shared memory and a zombie worker may yet write to it, so recycling it could let
+that write land on another task. Both are deliberately left out of circulation.
+
+Spawn **arguments** do not cost a slot in this runtime: a `SPAWN` record carries the task's arena
+address in its own 16 bytes, so the only slot a spawn takes is the one its result lands in.
+
+**Exhaustion is a typed refusal, not corruption.** `IpcException` names the table, how many slots are
+outstanding and the knob to turn. And because slot ids are recycled, an id is a *ticket* — the slot
+index plus the generation it was handed out in — so a handle kept past its release is refused by name
+rather than answered with the result of whatever task got the slot next:
+
+```
+Result slot 7 is at generation 12 and this handle holds generation 11: the slot was released
+and handed to another task.
+```
+
+`tools/soak-arena-watermark.php` reports the series that matters: the number of slot records the
+table has ever created must **plateau** under steady churn.
 
 ## Layers
 

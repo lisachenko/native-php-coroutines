@@ -32,10 +32,32 @@ use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
  *
  * Nothing here is on the wire: a `RESULT` record names a slot and says "settled", and the value is
  * read from the arena rather than from the socket.
+ *
+ * # The three fields recycling added
+ *
+ * A shared slot is a **borrowed** record now: the substrate hands it back out once it is released,
+ * so this process has to know when it is done with one and whether it is entitled to give it back
+ * at all.
+ *
+ * - {@see self::$owned} — this process allocated the slot. Only an owner releases; a process that
+ *   attached to somebody else's slot has no idea who else is still reading it.
+ * - {@see self::$handles} — how many {@see JoinHandle}s in this process still name the slot. The
+ *   release happens when the last of them has taken its answer, which is what "every handle has
+ *   read it" means locally.
+ * - {@see self::$sharedSettled} — whether the *shared* record really settled, as opposed to this
+ *   process having decided the answer locally. A slot failed because its worker died is complete
+ *   here and still pending there, and releasing it would hand a live record to the next task while
+ *   a zombie worker may yet write to it. Those slots stay out of circulation on purpose.
  */
 final class ResultSlot
 {
     public bool $complete = false;
+
+    /** Whether the authoritative shared record settled, rather than this process giving up on it. */
+    public bool $sharedSettled = false;
+
+    /** Local claims on this slot; the shared record goes back when the last one is satisfied. */
+    public int $handles = 0;
 
     /** The outcome as a record, once complete and successful — the path that needs no arena. */
     public ?TaggedRecord $value = null;
@@ -59,5 +81,6 @@ final class ResultSlot
     public function __construct(
         public readonly int $id,
         public readonly int $workerId,
+        public readonly bool $owned = true,
     ) {}
 }

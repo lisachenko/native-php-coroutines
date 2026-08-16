@@ -27,9 +27,28 @@ use Lisachenko\NativePhpCoroutines\SuspendCommand;
  * The park is marked **externally wakeable**, which keeps deadlock detection honest — no amount of
  * local scheduling could produce this wakeup, so a process with nothing but parallel waits
  * outstanding is idle, not deadlocked.
+ *
+ * # The handle owns the answer, not the slot
+ *
+ * Shared slots are recycled, so holding one open for the rest of a run is a real cost: a pool that
+ * never gives slots back exhausts a supply that is pre-sized in the arena and cannot grow. This
+ * handle therefore takes its answer out of the slot the first time it is awaited, keeps it, and
+ * tells {@see SlotTable::release()} the slot is finished with. Awaiting again replays what was
+ * kept — the same value, or the same throwable — and never touches shared memory a second time.
+ *
+ * The order matters and is not an implementation detail: **capture, then release.** After the
+ * release the shared record may already belong to another task, and a read of it would be refused
+ * by generation rather than answered — which is the safety net, not the plan.
  */
 final class JoinHandle implements JoinHandleInterface
 {
+    /** Whether the answer has been taken out of the slot and the slot handed back. */
+    private bool $taken = false;
+
+    private mixed $outcome = null;
+
+    private ?\Throwable $failure = null;
+
     public function __construct(
         private readonly SlotTable $slots,
         private readonly SchedulerInterface $scheduler,
@@ -44,6 +63,10 @@ final class JoinHandle implements JoinHandleInterface
 
     public function isComplete(): bool
     {
+        if ($this->taken) {
+            return true;
+        }
+
         $slot = $this->slots->slot($this->slotId);
 
         if (!$slot->complete) {
@@ -58,6 +81,14 @@ final class JoinHandle implements JoinHandleInterface
 
     public function await(): mixed
     {
+        if ($this->taken) {
+            if ($this->failure !== null) {
+                throw $this->failure;
+            }
+
+            return $this->outcome;
+        }
+
         $slot = $this->slots->slot($this->slotId);
 
         // Read shared memory before every park, never after: a slot settled between the spawn and
@@ -81,16 +112,22 @@ final class JoinHandle implements JoinHandleInterface
             $this->slots->refresh();
         }
 
-        if ($slot->error !== null) {
-            throw $slot->error;
+        // Taken out of the slot BEFORE it is handed back. An OBJ result is the very object the
+        // worker mutated, at the address it lives at, and it stays valid afterwards: releasing a
+        // slot returns the slot record, never the arena memory the answer lives in — the arena
+        // frees nothing at all.
+        $this->failure = $slot->error;
+        $this->outcome = $slot->hasDecoded
+            ? $slot->decoded
+            : ValueCodec::fromRecord($slot->value ?? TaggedRecord::nil());
+        $this->taken = true;
+
+        $this->slots->release($this->slotId);
+
+        if ($this->failure !== null) {
+            throw $this->failure;
         }
 
-        // Read straight out of the arena: an OBJ result is the very object the worker mutated, at
-        // the address it lives at, and never a copy rebuilt from an encoding.
-        if ($slot->hasDecoded) {
-            return $slot->decoded;
-        }
-
-        return ValueCodec::fromRecord($slot->value ?? TaggedRecord::nil());
+        return $this->outcome;
     }
 }

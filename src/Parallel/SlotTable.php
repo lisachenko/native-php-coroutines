@@ -37,6 +37,37 @@ use Lisachenko\SharedData\Ipc\SlotResult;
  * substrate's `readSlot()`, which takes the slot's mutex for the `{state, tag, payload}` triple and
  * materializes the value after releasing it, so a reader can never observe a tag from one generation
  * and a payload from another.
+ *
+ * # Shared slots are borrowed, and this class is what gives them back
+ *
+ * The substrate recycles slots, which is what stops a long-running pool exhausting a supply that is
+ * pre-sized in the arena and cannot grow. A slot goes back on its free list only when its owner says
+ * so, and that signal is this class's job: {@see self::release()} hands the record back once the
+ * last local handle has taken its answer.
+ *
+ * **When exactly it is safe** is the whole question, and the answer is *after the outcome has been
+ * copied into per-process state*. {@see self::settle()} is the only place this process reads the
+ * shared record, and it copies everything it needs — the decoded value, or a
+ * {@see ParallelTaskException} built from the shared error object's named properties — into the
+ * local {@see ResultSlot} before returning. From that point nothing here looks at shared memory for
+ * that slot again: {@see self::refresh()} skips slots that are locally complete, and
+ * {@see self::failPendingOf()} reaches the shared record only through `refresh()`. Releasing after
+ * a handle has taken its answer therefore has no late reader to race with.
+ *
+ * The values that came *out* of the record stay valid: an `OBJ` or `STR` result is an address into
+ * the arena, and the arena frees nothing — releasing a slot returns the slot **record**, not the
+ * memory the answer lives in. The same goes for a panic's `SharedError`: the strings the
+ * `ParallelTaskException` carries are arena strings, and no reclamation of that graph is attempted
+ * here. A child may never free arena memory at all, so error graphs remain leak-until-teardown.
+ *
+ * Two slots deliberately do **not** come back:
+ *
+ * - one whose worker died before settling it. The local answer is a crash exception, the shared
+ *   record is still pending, and a zombie worker may yet write to it. Recycling it would let that
+ *   write land on another task's slot.
+ * - one whose handle is never awaited. Nothing has read it, so nothing can say it is safe.
+ *
+ * Both are the pre-recycling behaviour, scoped down to the cases that actually need it.
  */
 final class SlotTable
 {
@@ -64,12 +95,19 @@ final class SlotTable
         return $this->arena !== null;
     }
 
-    /** Reserve a slot for work about to be dispatched to $workerId. */
+    /**
+     * Reserve a slot for work about to be dispatched to $workerId.
+     *
+     * With an arena the id that comes back is a substrate slot **ticket** — index and generation —
+     * and this process owns it: it is the one that will give the record back.
+     */
     public function open(int $workerId): ResultSlot
     {
         $id = $this->arena?->slotTable()->allocateSlot() ?? $this->nextId++;
 
         $slot = new ResultSlot($id, $workerId);
+
+        ++$slot->handles;
 
         $this->slots[$slot->id] = $slot;
 
@@ -82,17 +120,73 @@ final class SlotTable
      * This is what makes a result awaitable from a process that did not spawn the task: the slot id
      * is the whole handle, the state is in shared memory, and a process that has attached to the
      * arena can read it whether or not it has ever heard of the worker that will settle it.
+     *
+     * The shared record is read **here**, before anything else, precisely because the id may be
+     * stale: slots are recycled, and a ticket the table has moved past is refused by the substrate
+     * with the slot and both generations named. That refusal is the point — the alternative to it
+     * is attaching to whichever task got the slot next and presenting its result as this one's.
+     *
+     * An adopter is not an owner. It never releases the record, because it cannot know who else in
+     * the family is still reading it; the process that allocated the slot does that, and an adopter
+     * that has not finished by then finds its next read refused rather than answered.
      */
     public function adopt(int $slotId, int $workerId = -1): ResultSlot
     {
-        if ($this->arena === null) {
-            throw new \LogicException(
-                'a result slot can only be adopted from another process when the slots live in the '
-                . 'shared arena; construct the runtime with workers > 0',
-            );
+        $arena = $this->arena ?? throw new \LogicException(
+            'a result slot can only be adopted from another process when the slots live in the '
+            . 'shared arena; construct the runtime with workers > 0',
+        );
+
+        $slot = $this->slots[$slotId] ?? null;
+
+        if ($slot === null) {
+            $result = $arena->slotTable()->readSlot($slotId);
+            $slot   = $this->slots[$slotId] = new ResultSlot($slotId, $workerId, owned: false);
+
+            if (!$result->isPending()) {
+                $this->settle($slot, $result);
+            }
         }
 
-        return $this->slots[$slotId] ??= new ResultSlot($slotId, $workerId);
+        ++$slot->handles;
+
+        return $slot;
+    }
+
+    /**
+     * Give a slot back once the handle holding it has taken its answer.
+     *
+     * Counted rather than immediate: two handles in one process may name one slot — `attachResult()`
+     * of a slot this process opened is exactly that — and the record only goes back when the last
+     * of them is satisfied. The local entry is dropped either way, because a per-process map that
+     * only ever grows is a leak of its own on a pool that runs for days.
+     */
+    public function release(int $slotId): void
+    {
+        $slot = $this->slots[$slotId] ?? null;
+
+        if ($slot === null) {
+            return;
+        }
+
+        if ($slot->handles > 0) {
+            --$slot->handles;
+        }
+
+        if ($slot->handles > 0 || !$slot->complete) {
+            return;
+        }
+
+        unset($this->slots[$slotId]);
+
+        // Only what this process owns, and only what the family really settled: a slot completed
+        // locally because its worker died is still pending in shared memory, and the substrate
+        // refuses to recycle a pending slot for the same reason we would not want it to.
+        if (!$slot->owned || !$slot->sharedSettled) {
+            return;
+        }
+
+        $this->arena?->slotTable()->releaseSlot($slotId);
     }
 
     public function slot(int $slotId): ResultSlot
@@ -227,6 +321,11 @@ final class SlotTable
      */
     private function settle(ResultSlot $slot, SlotResult $result): void
     {
+        // The one place this process reads the shared record, so the one place that decides when it
+        // is safe to hand it back: everything the waiter will ever need is copied into per-process
+        // state right here, and nothing after this point looks at shared memory for this slot.
+        $slot->sharedSettled = true;
+
         if (!$result->isPanic()) {
             $slot->complete   = true;
             $slot->hasDecoded = true;
