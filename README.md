@@ -521,6 +521,10 @@ z-engine requires it, and z-engine is a hard dependency of this package.
   released either. The drain gives it a budget, then `run()` throws `UndrainableCoroutineException`
   naming the coroutine and the line that spawned it, and the runtime terminates the process itself
   rather than leaving the fiber for the engine to destroy — which is an uncatchable fatal.
+- **An idle preemptive runtime is as quiet as a cooperative one.** The slice clock is stopped for
+  exactly the time the process spends blocked in the poller — there is no coroutine to take the CPU
+  away from — and started again on every way out of it, so a server waiting for work does not pay a
+  hundred wakeups a second. Every forked worker gets the same treatment for its own inbox wait.
 - **`workers: 0` maps no arena at all.** The shared surface is then refused with a message naming the
   remedy rather than half-composed — a cooperative runtime stays exactly as cheap as it was.
 
@@ -533,8 +537,8 @@ composer phpstan                                               # level max
 composer cs:fix                                                # PER-CS2.0, a local step
 ```
 
-Coding standards are deliberately **not** a CI job — CI runs `tests` and `static-analysis` across
-PHP 8.4 and 8.5. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
+Coding standards are deliberately **not** a CI job — CI runs `tests`, `static-analysis` and a
+bounded `preemption-soak` across PHP 8.4 and 8.5. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
 version and a minimal reproducer instead of retrying.
 
 Contributor rules — the engine contracts, the shared-memory disciplines, the preemption obligations
@@ -548,6 +552,7 @@ Long-running checks, run deliberately, not part of `composer test`:
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-preemption.php --seconds=30
 ```
 
 | Tool | Asserts | Exit codes |
@@ -555,10 +560,18 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | `soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb, or growth past `--tolerance`, fails | 0 flat, 1 climbing, 2 inconclusive |
 | `soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
 | `soak-arena-watermark.php` | the arena watermark **plateaus** under a steady-state parallel workload, process memory stays flat, and no child survives. The arena is a bump allocator with no free list, so the criterion is a plateau and not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `soak-preemption.php` | a `--seconds=N` preemptive run of call-free burners, parkers and socket-pair IO stays correct and flat: every burner's arithmetic matches the uninterrupted reference, memory is flat, every coroutine finishes with none left parked in the interrupt callback, and the process reaches its own verdict rather than a fatal | 0 correct and flat, 1 a check failed, 2 inconclusive (including "never preempted") |
 
 Each tool can produce its own failure on demand — `--inject-leak` and `--self-test` — so the detector
 itself is testable. `soak-arena-watermark.php --self-test` rewrites a shared string property every
 round, which costs an arena block per write by design, and must come back FAIL.
+`soak-preemption.php --self-test` corrupts one burner's sum by a single unit and must fail the
+arithmetic check; `--inject-leak` retains a block per round and must fail the memory check.
+
+`soak-preemption.php` is the only check in CI besides the suite and PHPStan: a 20-second run on each
+minor, because the failures preemption is prone to — a resume that loses a partial result, a fiber
+left parked in the FFI callback — need a long continuous run to appear at all, and the tests only
+ever preempt for a second or two.
 
 ## License
 

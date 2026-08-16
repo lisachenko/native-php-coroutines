@@ -146,6 +146,16 @@ The mechanism was selected by experiment, and the negative result is the load-be
   takes the CPU back, not because the coroutine hands it over. Draining with the clock disarmed is
   the unbounded wait again, one step further along.
 - **Each forked worker re-arms its own timer** — `setitimer` intervals are cleared in the child.
+- **The clock is stopped for the idle poll, and the re-arm is a `finally`.** A free-running 10 ms
+  timer wakes an idle preemptive process ~100 times a second to preempt nobody, so
+  `Scheduler::pollIdle()` brackets the one blocking call with `Preemptor::pauseSlicing()` and
+  `resumeSlicing()`. Two conditions make that safe and neither is negotiable: **idle means the
+  poller is about to block**, never "the run queue looks empty" — a coroutine about to run must
+  still be sliceable — and the re-arm lives in a `finally` spanning the whole `poll()`, so no way
+  out of it (a readiness, a timeout, the EINTR retry the poller does internally, a throw) can leave
+  the process silently cooperative. Pausing is not disarming: the hook stays installed, SIGALRM
+  stays ours, and `isArmed()` goes on saying yes. A missed re-arm reports nothing and fails nowhere,
+  which is why it is structural rather than careful.
 - **10 ms is a target, not a guarantee.** A single internal opcode is not interruptible: `sort()`
   over 4M ints delayed preemption by 1.6–2.0 s. Never document or assume a bounded slice; document
   the caveat with it.
@@ -253,7 +263,13 @@ in every process.
   another object's fields as this task's failure.
 - **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
   supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
-  assumes.
+  assumes. **The per-process *view* of a slot is a different lifetime and must not follow it:**
+  `SlotTable` hands out a claim with every `open()`/`adopt()`, `JoinHandle` releases it in its
+  destructor, and a settled slot with no claims and no waiters is forgotten. Retaining settled views
+  instead costs a `ResultSlot` per spawn for the whole run — which no arena counter can see and
+  `memory_get_usage(true)` cannot either at its 2 MiB chunk granularity, so it surfaces only as the
+  parent's RSS climbing. That was issue #24; the shared slot and its answer are untouched by the
+  forget, and `adopt()` takes a fresh view whenever one is wanted again.
 
 ## Environment
 
@@ -295,9 +311,9 @@ composer cs:check    # the same, without writing
 composer phpstan     # level max, must be clean
 ```
 
-CI runs **`tests` and `static-analysis` only**, both across PHP 8.4 and 8.5. The coding-standards job
-was deliberately removed: php-cs-fixer is a development tool here, and re-checking on a runner only
-turns a fixable formatting nit into a red build. **Do not re-add it.**
+CI runs **`tests`, `static-analysis` and the bounded `preemption-soak`**, all across PHP 8.4 and 8.5.
+The coding-standards job was deliberately removed: php-cs-fixer is a development tool here, and
+re-checking on a runner only turns a fixable formatting nit into a red build. **Do not re-add it.**
 
 ### A segfault is an engine-level bug, never a flaky test
 
@@ -335,6 +351,7 @@ Not part of `composer test` — these run for a long time and are run deliberate
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-memory-flatness.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-no-leftover-children.php
 php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
+php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-preemption.php --seconds=30
 ```
 
 | Tool | Asserts | Exit codes |
@@ -342,11 +359,20 @@ php8.4 -d ffi.enable=1 -d opcache.jit=off tools/soak-arena-watermark.php
 | `tools/soak-memory-flatness.php` | RSS and `memory_get_usage(true)` stay flat over sustained spawn/park/resume cycles; a monotonic climb or growth past the tolerance fails | 0 flat, 1 climbing, 2 inconclusive |
 | `tools/soak-no-leftover-children.php` | no live child and no zombie survives a run | 0 clean, 1 leftovers, 2 inconclusive |
 | `tools/soak-arena-watermark.php` | the arena watermark **plateaus** under a steady state, process memory stays flat, and no child survives. Leak-until-teardown is the design, so the criterion is a plateau, not zero growth | 0 plateau, 1 climbing or a leftover child, 2 inconclusive |
+| `tools/soak-preemption.php` | a continuous preemptive run of call-free burners, parkers and socket-pair IO: every burner's arithmetic matches the uninterrupted reference, memory stays flat, every coroutine finishes and none is left parked in the interrupt callback, and the process reaches its own verdict instead of a fatal | 0 correct and flat, 1 a check failed, 2 inconclusive — including a run that was never preempted, which measured a cooperative workload |
 
 Every one of them can produce its own failure on demand (`--inject-leak`, `--self-test`). Use that
 after changing the detection logic: a detector nobody has seen fail is a detector nobody knows works.
 `soak-arena-watermark.php --self-test` rewrites a shared string property every round, which is the
-substrate's documented per-write arena cost, and must come back FAIL.
+substrate's documented per-write arena cost, and must come back FAIL. `soak-preemption.php
+--self-test` corrupts one burner's sum by a single unit — the smallest wrong answer a lost resume
+could produce — and `--inject-leak` retains a block per round; both must come back FAIL.
+
+**The preemption soak is the exception to "CI runs tests and static-analysis only".** It runs there,
+20 seconds per minor, because its subject is the one thing a two-second test cannot show: the suite's
+longest continuous preemptive run is a few hundred slices, and a resume that loses a partial result
+or a fiber left in the FFI callback is a defect that only surfaces over thousands. Keep it bounded —
+a soak job that grows into minutes is a soak job somebody will delete.
 
 ## Repository map
 
@@ -370,7 +396,8 @@ src/Parallel/Protocol/     Tag, TaggedRecord, Opcode, ControlRecord — the valu
 src/Exception/             the catchable failures, each naming its remedy
 tests/Functional/*.phpt    the suite, one behaviour per file
 tests/Support/             fakes for the unit-shaped tests
-tools/                     soak tooling (memory flatness, process hygiene, arena watermark)
+tools/                     soak tooling (memory flatness, process hygiene, arena watermark,
+                           preemption under a long continuous run)
 spikes/                    the preemption experiments and their verdicts; not run by composer test
 ```
 

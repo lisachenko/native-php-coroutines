@@ -44,6 +44,15 @@ use Lisachenko\NativePhpCoroutines\Scheduler;
  *   worker. Leaving the outermost section re-raises the interrupt so the deferred preemption is
  *   taken immediately rather than up to a slice later.
  *
+ * # The clock stops while the process is idle
+ *
+ * A slice measures the CPU a coroutine is holding, so there is nothing to measure while no
+ * coroutine is running. {@see self::pauseSlicing()} and {@see self::resumeSlicing()} let the
+ * scheduler stop the clock for exactly the time it spends blocked in the poller, which is what
+ * keeps an idle preemptive runtime from waking a hundred times a second to preempt nobody. Pausing
+ * is not disarming: the hook stays installed, the signal stays ours, and this class keeps reporting
+ * itself armed.
+ *
  * # What preemption does not promise
  *
  * A time slice is a target, not a bound. The interrupt check sits between opcodes, so a single
@@ -101,6 +110,15 @@ final class Preemptor
     private bool $requested = false;
 
     private int $criticalDepth = 0;
+
+    /**
+     * The clock is stopped because the process is blocked in the poller with nothing running.
+     *
+     * Distinct from {@see self::$armed}, and the distinction is the whole point: a paused preemptor
+     * is still armed — the hook is installed, the signal is ours, `shouldPreempt()` still answers —
+     * it simply has no clock ticking while there is nothing on the CPU to take away.
+     */
+    private bool $slicingPaused = false;
 
     private int $preemptions = 0;
 
@@ -182,7 +200,9 @@ final class Preemptor
      * Stop preempting, and leave nothing suspended inside the engine callback behind.
      *
      * The drain happens *first*, while the clock is still running: a coroutine resumed here may be
-     * in a loop that never yields, and only a live timer guarantees that resuming it returns.
+     * in a loop that never yields, and only a live timer guarantees that resuming it returns. That
+     * is also why the idle pause is lifted before the drain rather than left to the ordinary path —
+     * a teardown reached from inside a blocking poll would otherwise drain against a stopped clock.
      *
      * It is bounded, so this returns even for a coroutine that never cooperates. What it could not
      * get out of the callback is still owned by the scheduler and reported by
@@ -194,11 +214,13 @@ final class Preemptor
             return;
         }
 
+        $this->resumeSlicing();
         $this->scheduler->drainPreempted();
 
         $this->clock->disarm();
-        $this->armed     = false;
-        $this->requested = false;
+        $this->armed         = false;
+        $this->requested     = false;
+        $this->slicingPaused = false;
 
         if (extension_loaded('pcntl')) {
             $previous = $this->previousSignalHandler;
@@ -224,12 +246,75 @@ final class Preemptor
             return;
         }
 
-        $this->requested = false;
+        $this->requested     = false;
+        $this->slicingPaused = false;
 
         pcntl_async_signals(true);
         pcntl_signal(SIGALRM, $this->onTick(...));
 
         $this->clock->rearmAfterFork();
+    }
+
+    /**
+     * Stop the clock on the way into a blocking poll, without giving up preemption.
+     *
+     * A free-running interval timer raises SIGALRM about a hundred times a second whether or not
+     * there is anything to preempt, and every one of those signals cuts the poller's
+     * `stream_select()` short. Correctness survives it — the poller retries with what is *left* of
+     * the timeout — but an idle preemptive server pays a hundred wakeups a second to suspend
+     * nobody.
+     *
+     * Nothing is given up by stopping the clock there, because "there" means no coroutine is
+     * running: the run queue is empty, every due timer has fired, and the process is about to block
+     * in the kernel. What is emphatically **not** the condition for this is "the run queue looks
+     * empty" — a coroutine that is about to run must still be sliceable, which is why the pause
+     * brackets the blocking call itself and is undone before anything is dequeued.
+     *
+     * Only the clock stops. The interrupt hook stays installed, SIGALRM stays ours, a preemption
+     * that was requested and not yet taken stays pending, and {@see self::isArmed()} goes on saying
+     * yes — the runtime is still preemptive, it is merely not counting.
+     */
+    public function pauseSlicing(): void
+    {
+        if (!$this->armed || $this->slicingPaused) {
+            return;
+        }
+
+        $this->slicingPaused = true;
+
+        $this->clock->disarm();
+    }
+
+    /**
+     * Start the clock again on the way out of the poll — on *every* way out.
+     *
+     * The caller owes this a `finally`. A readiness, a timeout, a signal that cut the wait short
+     * and sent it round the EINTR retry, and a poller that throws must all end with the clock
+     * running again, because the next thing the scheduler does is resume a coroutine. A missed
+     * re-arm fails nowhere and reports nothing: it leaves the process cooperative for the rest of
+     * its life behind a preemptor that still calls itself armed.
+     *
+     * The interval restarts from now rather than resuming the grid the pause interrupted, so the
+     * coroutine that runs next gets a whole slice instead of whatever was left of one.
+     */
+    public function resumeSlicing(): void
+    {
+        if (!$this->slicingPaused) {
+            return;
+        }
+
+        $this->slicingPaused = false;
+
+        // Checked rather than assumed: the shutdown drain disarms, and it can run from anywhere.
+        if ($this->armed) {
+            $this->clock->arm();
+        }
+    }
+
+    /** Whether the clock is stopped for an idle poll; still armed, just not ticking. */
+    public function isSlicingPaused(): bool
+    {
+        return $this->slicingPaused;
     }
 
     /**
@@ -353,6 +438,9 @@ final class Preemptor
         $this->shutdownDrainRegistered = true;
 
         register_shutdown_function(function (): void {
+            // Shutdown can be reached from anywhere, an idle poll included, and the drain below
+            // needs a running clock to be sure a resumed coroutine ever comes back.
+            $this->resumeSlicing();
             $this->scheduler->drainPreempted();
             $this->clock->disarm();
             $this->armed = false;

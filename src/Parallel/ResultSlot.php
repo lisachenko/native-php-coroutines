@@ -56,6 +56,20 @@ final class ResultSlot
      */
     public array $waiters = [];
 
+    /**
+     * How many {@see JoinHandle}s in this process can still ask for this result.
+     *
+     * The local view is bookkeeping, not the answer: the answer is in shared memory and stays there.
+     * So the view is worth keeping only while somebody here can still read it, and the count is what
+     * says so — one claim per handle, released when the handle is collected. When the last claim
+     * goes and the slot has settled, {@see SlotTable} forgets it, which is what keeps a steady-state
+     * spawn/await loop from retaining a `ResultSlot` per spawn for the life of the run.
+     *
+     * The **shared** slot id is a different thing and is not affected: ids are bump-allocated from a
+     * pre-sized table and never recycled, by design.
+     */
+    public int $claims = 0;
+
     public function __construct(
         public readonly int $id,
         public readonly int $workerId,
