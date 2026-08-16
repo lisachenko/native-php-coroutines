@@ -241,7 +241,13 @@ in every process.
   another object's fields as this task's failure.
 - **Result slots are bump-allocated from a pre-sized table and never given back.** They are a bounded
   supply for the life of the arena, which is what `soak-arena-watermark.php` reports rather than
-  assumes.
+  assumes. **The per-process *view* of a slot is a different lifetime and must not follow it:**
+  `SlotTable` hands out a claim with every `open()`/`adopt()`, `JoinHandle` releases it in its
+  destructor, and a settled slot with no claims and no waiters is forgotten. Retaining settled views
+  instead costs a `ResultSlot` per spawn for the whole run — which no arena counter can see and
+  `memory_get_usage(true)` cannot either at its 2 MiB chunk granularity, so it surfaces only as the
+  parent's RSS climbing. That was issue #24; the shared slot and its answer are untouched by the
+  forget, and `adopt()` takes a fresh view whenever one is wanted again.
 
 ## Environment
 

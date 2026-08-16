@@ -37,6 +37,23 @@ final class JoinHandle implements JoinHandleInterface
         private readonly int $workerId,
     ) {}
 
+    /**
+     * The claim this handle was given by `open()`/`adopt()` goes back when the handle does.
+     *
+     * A handle is the only thing in this process that can still ask for the result, so its death is
+     * the moment the slot's **local view** stops being worth keeping. Without this a steady-state
+     * `spawnParallel()->await()` loop retains one `ResultSlot` per spawn for the whole run — a few
+     * hundred bytes a spawn that never show up in `memory_get_usage(true)` (2 MiB chunk granularity)
+     * and never touch the arena watermark, which is exactly the climb
+     * `tools/soak-arena-watermark.php` reports as RSS with both arena counters flat.
+     *
+     * The shared slot is untouched: its answer, and its id, stay in the arena.
+     */
+    public function __destruct()
+    {
+        $this->slots->release($this->slotId);
+    }
+
     public function slotId(): int
     {
         return $this->slotId;
