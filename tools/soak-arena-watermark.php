@@ -63,7 +63,7 @@ use Lisachenko\NativePhpCoroutines\Parallel\SharedArena;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
@@ -87,7 +87,7 @@ final class SoakEchoTask implements Task
 {
     public function __construct(private readonly int $value) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $this->value;
     }
@@ -256,7 +256,7 @@ $resident = [];
 
 $slotsConsumed = 0;
 
-$runtime->run(static function (RuntimeInterface $self) use (
+$runtime->run(static function (TaskRuntime $self) use (
     $options,
     $arena,
     $scalarTask,

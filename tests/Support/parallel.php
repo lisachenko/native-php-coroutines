@@ -25,7 +25,7 @@ namespace Lisachenko\NativePhpCoroutines\Tests\Support;
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Timer;
 
 /** Returns whatever it was built with — the simplest possible round trip. */
@@ -33,7 +33,7 @@ final class ConstantTask implements Task
 {
     public function __construct(private readonly mixed $value) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $this->value;
     }
@@ -44,7 +44,7 @@ final class SumTask implements Task
 {
     public function __construct(private readonly int $left, private readonly int $right) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $this->left + $this->right;
     }
@@ -53,7 +53,7 @@ final class SumTask implements Task
 /** Reports the pid it ran in — how a test proves which worker took the work. */
 final class PidTask implements Task
 {
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return posix_getpid();
     }
@@ -64,7 +64,7 @@ final class SleepingTask implements Task
 {
     public function __construct(private readonly float $seconds, private readonly int $value = 0) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         Coroutine::sleep($this->seconds);
 
@@ -75,7 +75,7 @@ final class SleepingTask implements Task
 /** Ends in an uncaught throwable, which the worker reports as a PANIC record. */
 final class PanickingTask implements Task
 {
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         throw new \RuntimeException('the task exploded');
     }

@@ -177,6 +177,22 @@ the ordering above enforceable rather than aspirational:
 Declaring a root or registering a closure after step 3 is **refused with a message saying why**, not
 deferred: neither would reach a process that already exists.
 
+That before/after line is expressed in the type system, and keep it there. **`TaskRuntime` is the
+surface of code executing inside a run** — the main closure and every `Task::run()` receive it, and
+they receive the same type because main runs after the fork, in exactly the regime a task runs in.
+Configuration (`declareShared()`, `registerSharedClosure()`, `publishTask()`), lifecycle (`run()`)
+and diagnostics (`arena()`, `supervisor()`, `workers()`) live only on the concrete `Runtime`, which
+only the code that constructed it holds. Do not add a method to `TaskRuntime` unless calling it
+mid-run, from any process of the family, is legitimate — and do not "fix" a task that wants
+configuration by handing it the concrete class; `testTheTaskSurfaceCarriesNoConfigurationOrLifecycle`
+pins the split. There are deliberately **no factory shortcuts on the runtime** (`channel()` and
+friends): a local primitive is constructed on `$runtime->scheduler()`, a shared one arrives through
+`$runtime->shared()`, and both reach calling code as plain values — that substitution is the reason
+primitives take their scheduler explicitly. `preemptor()` *is* on the task surface, and it is
+answered from the scheduler, not from constructor state: a worker's preemptor is built after the
+fork against the child's own scheduler, so the scheduler is the only place the binding is truthful
+in every process.
+
 - **Classes whose instances travel must be loaded before the fork.** A shared clone carries one
   `zend_class_entry` for the whole family. `declareShared()` and `persist()` force the class; a class
   first autoloaded inside a worker is fine there and meaningless to its siblings.
@@ -317,6 +333,7 @@ substrate's documented per-write arena cost, and must come back FAIL.
 
 ```
 src/Runtime.php            composition root: scheduler, preemptor, shared arena, worker pool
+src/TaskRuntime.php        the execution surface: what main and every parallel task is handed
 src/Scheduler.php          run queue, timer heap, the idle turn, deadlock detection
 src/Coroutine.php          a Fiber plus park/unpark bookkeeping; unpark does not schedule
 src/StreamPoller.php       the one stream_select() of the process; EINTR is routine, not an error

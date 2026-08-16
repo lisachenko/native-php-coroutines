@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Exception\ParallelTaskException;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedPanicTask;
 use Lisachenko\NativePhpCoroutines\Timer;
 
@@ -30,7 +30,7 @@ $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 $task = new SharedPanicTask();
 $runtime->publishTask($task);
 
-$runtime->run(static function (RuntimeInterface $self) use ($task): void {
+$runtime->run(static function (TaskRuntime $self) use ($task): void {
     Timer::after(15.0, static function (): void {
         throw new RuntimeException('deadline: the panic never reached the waiter');
     });

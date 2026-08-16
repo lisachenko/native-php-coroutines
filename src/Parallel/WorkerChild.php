@@ -16,8 +16,8 @@ use Lisachenko\NativePhpCoroutines\Parallel\Protocol\ControlRecord;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\Opcode;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
 use Lisachenko\NativePhpCoroutines\SchedulerInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\SharedData\Ipc\SharedError;
 use Lisachenko\SharedData\Ipc\ValueTag;
 use Lisachenko\SharedData\Ipc\WakeOpcode;
@@ -74,7 +74,7 @@ final class WorkerChild
     private function __construct(
         private readonly ControlSocket $control,
         private readonly TaskDirectory $tasks,
-        private readonly RuntimeInterface $runtime,
+        private readonly TaskRuntime $runtime,
         private readonly SchedulerInterface $scheduler,
         private readonly ?SharedArena $arena,
     ) {}
@@ -84,7 +84,7 @@ final class WorkerChild
      *
      * @param ControlSocket         $control        The child's end of the pair; this call owns and
      *                                              closes it.
-     * @param RuntimeInterface|null $runtime        The runtime tasks are handed. Created here by
+     * @param TaskRuntime|null      $runtime        The runtime tasks are handed. Created here by
      *                                              default, **after** the fork: constructing it
      *                                              creates this process's scheduler, and a
      *                                              scheduler — and every fiber under it — must be
@@ -99,7 +99,7 @@ final class WorkerChild
     public static function main(
         ControlSocket $control,
         TaskDirectory $tasks,
-        ?RuntimeInterface $runtime = null,
+        ?TaskRuntime $runtime = null,
         ?SharedArena $arena = null,
         ?\Closure $afterScheduler = null,
         int $workerId = 0,

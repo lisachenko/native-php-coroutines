@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
 
 include __DIR__ . '/../../vendor/autoload.php';
@@ -20,7 +20,7 @@ include __DIR__ . '/../../vendor/autoload.php';
 // durations, so finishing in numeric order proves the real timer heap ordered
 // them rather than the run queue. wait() must then survive being parked across
 // all three wakeups.
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $group = new WaitGroup($runtime->scheduler());
 
     foreach ([3, 1, 2] as $worker) {

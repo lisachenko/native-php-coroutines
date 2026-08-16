@@ -27,7 +27,7 @@ namespace Lisachenko\NativePhpCoroutines\Tests\Support;
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 /**
  * A shared object with scalar and string properties — the shape the arena can hold.
@@ -50,7 +50,7 @@ final class EchoTask implements Task
 {
     public function __construct(private readonly mixed $value) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $this->value;
     }
@@ -61,7 +61,7 @@ final class SharedRootTask implements Task
 {
     public function __construct(private readonly string $name) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $runtime->shared($this->name);
     }
@@ -73,7 +73,8 @@ final class SharedRootTask implements Task
  * `mutableHandle()` rather than `$object->prop = …`: a direct property write is legal and visible
  * for scalars, but it is **unsynchronized** — the object is rewired to `std_object_handlers`, so
  * there is no write hook to take the stripe lock. A string written that way would store a
- * request-heap pointer no sibling can follow.
+ * request-heap pointer no sibling can follow. The handle comes straight off the task surface:
+ * mutation is what tasks do, so no downcast to the concrete runtime is needed to reach it.
  */
 final class MutateSharedTask implements Task
 {
@@ -83,16 +84,15 @@ final class MutateSharedTask implements Task
         private readonly string $label,
     ) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         $counter = $runtime->shared($this->root);
-        $arena   = $runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime ? $runtime->arena() : null;
 
-        if (!is_object($counter) || $arena === null) {
+        if (!is_object($counter)) {
             throw new \LogicException('the shared counter root is not available in this worker');
         }
 
-        $handle = $arena->store()->mutableHandle($counter);
+        $handle = $runtime->mutableHandle($counter);
         $handle->writeScalar('value', $this->value);
         $handle->writeString('label', $this->label);
         $handle->writeScalar('touchedBy', posix_getpid());
@@ -114,12 +114,8 @@ final class SharedClosureTask implements Task
 {
     public function __construct(private readonly string $name, private readonly int $argument) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
-        if (!$runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime) {
-            throw new \LogicException('this task needs the concrete runtime to resolve a closure');
-        }
-
         return ($runtime->sharedClosure($this->name))($this->argument);
     }
 }
@@ -138,8 +134,10 @@ final class SettleSlotsTask implements Task
     /** @param list<int> $slotIds */
     public function __construct(private readonly array $slotIds, private readonly string $prefix) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
+        // A deliberate downcast: this rig settles slots by hand, which is machinery the task
+        // surface intentionally does not carry. Real tasks never need the concrete runtime.
         $arena = $runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime ? $runtime->arena() : null;
 
         if ($arena === null) {
@@ -157,7 +155,7 @@ final class SettleSlotsTask implements Task
 /** Ends in an uncaught throwable, which the worker turns into a shared error-info object. */
 final class SharedPanicTask implements Task
 {
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         throw new \DomainException('the parallel task exploded');
     }
@@ -172,7 +170,7 @@ final class SharedSendTask implements Task
         private readonly string $prefix = 'v',
     ) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         $channel = $runtime->shared($this->root);
 
@@ -198,7 +196,7 @@ final class AwaitSlotTask implements Task
 {
     public function __construct(private readonly int $slotId) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return $runtime->attachResult($this->slotId)->await();
     }
@@ -216,7 +214,7 @@ final class PreemptionProbeTask implements Task
 {
     public function __construct(private readonly int $iterations = 4_000_000) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         $state                    = new \stdClass();
         $state->ticks             = 0;
@@ -256,6 +254,22 @@ final class PreemptionProbeTask implements Task
 }
 
 /**
+ * Reports whether the executing process can reach its own preemptor through the task surface.
+ *
+ * The wart this pins down: the preemptor of a forked worker is built after the fork, against the
+ * child's own scheduler, so a runtime accessor that reads constructor state answers null in every
+ * worker of a preemptive pool — and task code then has no way to mark a critical section. The
+ * truthful binding lives on the scheduler, and this task proves the surface reads it from there.
+ */
+final class ReportsPreemptorTask implements Task
+{
+    public function run(TaskRuntime $runtime): mixed
+    {
+        return $runtime->preemptor() !== null && $runtime->preemptor()->isArmed();
+    }
+}
+
+/**
  * Takes an arena lock and never gives it back: the worker is meant to be killed while holding it.
  *
  * Written as a bounded spin rather than a park on purpose — the point is that the process dies with
@@ -265,8 +279,10 @@ final class HoldArenaLockTask implements Task
 {
     public function __construct(private readonly string $root) {}
 
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
+        // A deliberate downcast: taking a raw stripe lock in order to die holding it is machinery
+        // the task surface intentionally does not carry. Real tasks never need the concrete runtime.
         $arena = $runtime instanceof \Lisachenko\NativePhpCoroutines\Runtime ? $runtime->arena() : null;
 
         if ($arena === null) {

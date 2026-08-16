@@ -10,7 +10,7 @@ error_reporting=E_ALL & ~E_DEPRECATED
 declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\AwaitSlotTask;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SleepingTask;
 use Lisachenko\NativePhpCoroutines\Timer;
@@ -27,7 +27,7 @@ $runtime = new Runtime(workers: 2, arenaSize: 32 << 20);
 $slow = new SleepingTask(0.3, 4242);
 $runtime->publishTask($slow);
 
-$runtime->run(static function (RuntimeInterface $self) use ($slow): void {
+$runtime->run(static function (TaskRuntime $self) use ($slow): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the cross-process await never returned');
     });

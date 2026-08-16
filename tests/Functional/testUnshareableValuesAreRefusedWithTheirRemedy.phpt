@@ -12,7 +12,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Exception\NotShareableValueException;
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Timer;
 use Lisachenko\SharedData\Ipc\NotShareableValueException as SubstrateRefusal;
 
@@ -36,7 +36,7 @@ fclose($stream);
 $runtime = new Runtime(workers: 1, arenaSize: 32 << 20);
 $runtime->declareShared('jobs', SharedChannel::class, 4);
 
-$runtime->run(static function (RuntimeInterface $self): void {
+$runtime->run(static function (TaskRuntime $self): void {
     Timer::after(15.0, static function (): void {
         throw new RuntimeException('deadline: the refusals never came back');
     });

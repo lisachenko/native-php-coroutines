@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 include __DIR__ . '/../../vendor/autoload.php';
 
@@ -22,7 +22,7 @@ $runtime = new Runtime();
 echo 'arena mapped: ', $runtime->arena() === null ? 'no' : 'yes', PHP_EOL;
 
 $task = new class implements Task {
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         return null;
     }
@@ -43,7 +43,7 @@ foreach ([
 }
 
 // Layer 1 itself is fully available on the same runtime.
-$runtime->run(static function (RuntimeInterface $self): void {
+$runtime->run(static function (TaskRuntime $self): void {
     echo 'the local scheduler is live: ', $self->scheduler()->current() !== null ? 'yes' : 'no', PHP_EOL;
 });
 ?>

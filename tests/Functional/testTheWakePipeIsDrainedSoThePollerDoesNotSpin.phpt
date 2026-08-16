@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedSendTask;
 use Lisachenko\NativePhpCoroutines\Timer;
 
@@ -36,7 +36,7 @@ $runtime->declareShared('stream', SharedChannel::class, 4);
 $producer = new SharedSendTask('stream', SENDS, 'x');
 $runtime->publishTask($producer);
 
-$runtime->run(static function (RuntimeInterface $self) use ($producer): void {
+$runtime->run(static function (TaskRuntime $self) use ($producer): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the sends never arrived');
     });

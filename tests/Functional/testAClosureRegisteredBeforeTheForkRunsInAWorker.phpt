@@ -10,7 +10,7 @@ error_reporting=E_ALL & ~E_DEPRECATED
 declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedClosureTask;
 use Lisachenko\NativePhpCoroutines\Timer;
 
@@ -32,7 +32,7 @@ $runtime->registerSharedClosure('triple', static fn (int $value): int => $value 
 $task = new SharedClosureTask('triple', 14);
 $runtime->publishTask($task);
 
-$runtime->run(static function (RuntimeInterface $self) use ($task): void {
+$runtime->run(static function (TaskRuntime $self) use ($task): void {
     Timer::after(15.0, static function (): void {
         throw new RuntimeException('deadline: the worker never called the shared closure');
     });

@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace Lisachenko\NativePhpCoroutines\Parallel;
 
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 /**
  * A unit of work that can run in another process.
@@ -37,10 +37,12 @@ interface Task
      * Do the work and return its result.
      *
      * The runtime passed in belongs to the *executing* process, so `shared()` and `persist()` here
-     * operate on that worker's view of the arena — which is the same memory the spawner sees.
+     * operate on that worker's view of the arena — which is the same memory the spawner sees. It is
+     * the narrow {@see TaskRuntime} surface on purpose: a task holds no way to start a second
+     * runtime inside its worker or to declare a shared root only its own process would see.
      *
      * The return value travels back through a result slot per the tag contract: scalars inline,
      * strings arena-copied, shared objects by address. Returning something unshareable throws.
      */
-    public function run(RuntimeInterface $runtime): mixed;
+    public function run(TaskRuntime $runtime): mixed;
 }

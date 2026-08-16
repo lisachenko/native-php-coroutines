@@ -11,7 +11,7 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Exception\WorkerCrashedException;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Tests\Support\HoldArenaLockTask;
 use Lisachenko\NativePhpCoroutines\Tests\Support\SharedCounter;
 use Lisachenko\NativePhpCoroutines\Timer;
@@ -32,7 +32,7 @@ $runtime->declareShared('counter', SharedCounter::class);
 $hold = new HoldArenaLockTask('counter');
 $runtime->publishTask($hold);
 
-$runtime->run(static function (RuntimeInterface $self) use ($hold): void {
+$runtime->run(static function (TaskRuntime $self) use ($hold): void {
     Timer::after(20.0, static function (): void {
         throw new RuntimeException('deadline: the waiter hung on a slot that can never complete');
     });

@@ -38,14 +38,14 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
 
 require __DIR__ . '/vendor/autoload.php';
 
 $runtime = new Runtime();
 
-$runtime->run(function (RuntimeInterface $runtime): void {
+$runtime->run(function (TaskRuntime $runtime): void {
     $group = new WaitGroup($runtime->scheduler());
 
     foreach ([3, 1, 2] as $id) {
@@ -75,16 +75,25 @@ all workers joined
 
 Three things in that snippet are the whole shape of the API:
 
-- **`Runtime::run()` takes the main coroutine** and hands it the runtime. When it returns, the run is
-  over — Go semantics, deliberately: whatever is still queued, sleeping or parked is **discarded**,
-  not awaited. A program that wants to wait says so, with a `WaitGroup` or a channel.
+- **`Runtime::run()` takes the main coroutine** and hands it a `TaskRuntime` — the narrow surface of
+  code executing *inside* the runtime, the same type a parallel task receives. Configuration
+  (`declareShared()`, `registerSharedClosure()`, `publishTask()`) and `run()` itself stay on the
+  concrete `Runtime`, because from inside a run each of them is a bug: main runs after the fork, so
+  a root declared there would exist in one process only, and a nested `run()` would start a runtime
+  inside a coroutine of the first. When main returns, the run is over — Go semantics, deliberately:
+  whatever is still queued, sleeping or parked is **discarded**, not awaited. A program that wants
+  to wait says so, with a `WaitGroup` or a channel.
 - **`Coroutine::spawn()`, `Coroutine::yield()` and `Coroutine::sleep()` are static**, because there
   is exactly one scheduler per process and they talk to the active one. `sleep()` parks on the timer
   heap, so a program that is only sleeping blocks in the kernel and burns no CPU.
 - **The primitives take a scheduler explicitly.** `Channel`, `Select`, `Context`, `WaitGroup`, `Once`
   and `Mutex` are all constructed with `$runtime->scheduler()` (a `SchedulerInterface`). Nothing is
   looked up from a global inside them, which is what will let a shared, cross-process channel be
-  substituted for a local one without changing a line of the calling code.
+  substituted for a local one without changing a line of the calling code. This is also why there
+  are deliberately no factory shortcuts on the runtime (`$runtime->channel()` and friends): a local
+  primitive is constructed on a scheduler, a shared one arrives through `$runtime->shared()`, and
+  both reach the calling code as plain values — one rule, visible at the construction site, for
+  every primitive present and future.
 
 ## Channels
 
@@ -100,11 +109,11 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 require __DIR__ . '/vendor/autoload.php';
 
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $scheduler = $runtime->scheduler();
 
     /** @var Channel<string> $jobs */
@@ -166,12 +175,12 @@ use Lisachenko\NativePhpCoroutines\Channel;
 use Lisachenko\NativePhpCoroutines\Context;
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Select;
 
 require __DIR__ . '/vendor/autoload.php';
 
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $scheduler = $runtime->scheduler();
 
     $request = Context::withCancel($scheduler);
@@ -239,14 +248,14 @@ declare(strict_types=1);
 
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Sync\Mutex;
 use Lisachenko\NativePhpCoroutines\Sync\Once;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
 
 require __DIR__ . '/vendor/autoload.php';
 
-(new Runtime())->run(function (RuntimeInterface $runtime): void {
+(new Runtime())->run(function (TaskRuntime $runtime): void {
     $scheduler = $runtime->scheduler();
 
     $once  = new Once($scheduler);
@@ -315,7 +324,7 @@ declare(strict_types=1);
 use Lisachenko\NativePhpCoroutines\Coroutine;
 use Lisachenko\NativePhpCoroutines\Io;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 use Lisachenko\NativePhpCoroutines\Sync\WaitGroup;
 
 require __DIR__ . '/vendor/autoload.php';
@@ -324,7 +333,7 @@ require __DIR__ . '/vendor/autoload.php';
 stream_set_blocking($client, false);
 stream_set_blocking($server, false);
 
-(new Runtime())->run(function (RuntimeInterface $runtime) use ($client, $server): void {
+(new Runtime())->run(function (TaskRuntime $runtime) use ($client, $server): void {
     $group = new WaitGroup($runtime->scheduler());
     $group->add(2);
 
@@ -382,7 +391,7 @@ else throws `NotShareableValueException` naming the remedy.
 use Lisachenko\NativePhpCoroutines\Parallel\SharedChannel;
 use Lisachenko\NativePhpCoroutines\Parallel\Task;
 use Lisachenko\NativePhpCoroutines\Runtime;
-use Lisachenko\NativePhpCoroutines\RuntimeInterface;
+use Lisachenko\NativePhpCoroutines\TaskRuntime;
 
 final class Report
 {
@@ -392,14 +401,14 @@ final class Report
 
 final class BuildReport implements Task
 {
-    public function run(RuntimeInterface $runtime): mixed
+    public function run(TaskRuntime $runtime): mixed
     {
         $report = $runtime->shared('report');
 
         // The synchronized write path. A bare $report->rows = ... is legal and visible, but it is
         // unsynchronized: a shared object is rewired to std_object_handlers, so there is no write
         // hook that could take the stripe lock for you.
-        $handle = $runtime->arena()->store()->mutableHandle($report);
+        $handle = $runtime->mutableHandle($report);
         $handle->writeScalar('rows', 128);
         $handle->writeString('status', 'done');
 
@@ -417,7 +426,7 @@ $runtime->publishTask($task = new BuildReport());
 
 $report = $runtime->shared('report');
 
-$runtime->run(function (RuntimeInterface $runtime) use ($task, $report): void {
+$runtime->run(function (TaskRuntime $runtime) use ($task, $report): void {
     $returned = $runtime->spawnParallel($task)->await();
 
     var_dump($returned === $report);  // true — the address is the value, not a copy of it
