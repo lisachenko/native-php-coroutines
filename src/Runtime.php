@@ -32,7 +32,8 @@ use Lisachenko\SharedData\NotPersistableException;
  *
  * # The order everything is created in is the design
  *
- * Fork is what makes sharing sound, and fork only copies what already exists:
+ * Workers must see the arena at the same address as the parent, and a fork only copies what already
+ * exists — so anything shared has to be built before it:
  *
  * 1. **the arena, the wake registry and the result slots** — in this constructor, so they exist
  *    before anything else and every worker inherits them at the same address;
