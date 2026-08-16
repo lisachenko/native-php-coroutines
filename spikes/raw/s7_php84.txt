@@ -1,0 +1,37 @@
+S7 — endings available to a process holding an undrainable fiber (PHP 8.4.19)
+
+--leave-installed          exit=255  signal=0  0.05s fatal=YES diagnosisKept=yes
+    | CHILD(--leave-installed): the fiber is preempt-suspended
+    | CHILD(--leave-installed): letting the script end with the fiber alive
+    | CHILD(--leave-installed): a shutdown function ran
+    | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/a8c517fe-0774-4854-82ec-039954e12e12/scratchpad/wt-issue18/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+--leave-uninstalled        exit=255  signal=0  0.05s fatal=YES diagnosisKept=yes
+    | CHILD(--leave-uninstalled): the fiber is preempt-suspended
+    | CHILD(--leave-uninstalled): hook uninstalled, letting the script end
+    | CHILD(--leave-uninstalled): a shutdown function ran
+    | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/a8c517fe-0774-4854-82ec-039954e12e12/scratchpad/wt-issue18/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+--exit                     exit=255  signal=0  0.05s fatal=YES diagnosisKept=yes
+    | CHILD(--exit): the fiber is preempt-suspended
+    | CHILD(--exit): calling exit(70) with the fiber alive
+    | CHILD(--exit): a shutdown function ran
+    | PHP Fatal error:  Throwing from FFI callbacks is not allowed in /tmp/claude-0/-home-user/a8c517fe-0774-4854-82ec-039954e12e12/scratchpad/wt-issue18/vendor/lisachenko/z-engine/src/System/Hook/InterruptHook.php on line 84
+--sigterm                  exit=143  signal=15 0.04s fatal=no  diagnosisKept=yes
+    | CHILD(--sigterm): the fiber is preempt-suspended
+    | CHILD(--sigterm): diagnosis on stdout before the signal
+    | CHILD(--sigterm): diagnosis on stderr before the signal
+--sigkill                  exit=137  signal=9  0.04s fatal=no  diagnosisKept=yes
+    | CHILD(--sigkill): the fiber is preempt-suspended
+    | CHILD(--sigkill): diagnosis on stdout before the signal
+    | CHILD(--sigkill): diagnosis on stderr before the signal
+--late-shutdown-function   exit=137  signal=9  0.04s fatal=no  diagnosisKept=yes
+    | CHILD(--late-shutdown-function): the fiber is preempt-suspended
+    | CHILD(--late-shutdown-function): registering from inside shutdown
+    | CHILD(--late-shutdown-function): a shutdown function ran
+    | CHILD(--late-shutdown-function): the late registration ran
+    | CHILD(--late-shutdown-function): killing from the late one
+--drain                    exit=0    signal=0  0.06s fatal=no  diagnosisKept=yes
+    | CHILD(--drain): the fiber is preempt-suspended
+    | CHILD(--drain): drained in 6 resume(s)
+    | CHILD(--drain): a shutdown function ran
+
+VERDICT S7: GREEN — leaving the fiber for request shutdown IS the S6 fatal; a self-directed SIGKILL after the diagnosis ends the process with the diagnosis intact and no fatal

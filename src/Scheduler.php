@@ -37,6 +37,34 @@ use Lisachenko\NativePhpCoroutines\Preemption\Preemptor;
  */
 final class Scheduler implements SchedulerInterface
 {
+    /**
+     * Wall clock one drain attempt may spend before it starts reporting stragglers.
+     *
+     * A ceiling on resumes alone cannot bound the wait, because a single resume is not itself
+     * time-bounded: preemption happens between opcodes, and one `sort()` over four million integers
+     * defers the next slice by around two seconds (spike S4). So the drain carries a clock as well.
+     */
+    public const float DEFAULT_DRAIN_BUDGET_SECONDS = 1.0;
+
+    /**
+     * Resumes one coroutine may be given, per drain attempt, before it is reported.
+     *
+     * A coroutine that is going to cooperate does it on the first resume, or within the handful it
+     * takes to finish the loop it was interrupted in — the drain of a 2M-iteration loop at a 2 ms
+     * slice takes six (spike S7's control run). Sixty-four is an order of magnitude above that, and
+     * it is the floor of the budget as well as its ceiling: **every coroutine is resumed at least
+     * once**, so a machine so loaded that the wall clock expires before anything ran cannot produce
+     * a straggler report about a coroutine that was never given a chance.
+     *
+     * A coroutine that needs more CPU than this to reach its *first* safe point is reported too,
+     * and that is deliberate: from here there is nothing to tell it apart from one that will never
+     * get there, and the answer to both is the same line of code — give it a safe point.
+     */
+    public const int DEFAULT_DRAIN_RESUMES = 64;
+
+    /** {@see TimerQueue::now()} counts in nanoseconds; the drain budget is stated in seconds. */
+    private const int NANOSECONDS_PER_SECOND = 1_000_000_000;
+
     /** The scheduler the static surfaces (`Coroutine::spawn()`, `Io::…`, `Timer::…`) talk to. */
     private static ?self $active = null;
 
@@ -65,6 +93,29 @@ final class Scheduler implements SchedulerInterface
      * @var array<int, Coroutine>
      */
     private array $preemptSuspended = [];
+
+    /**
+     * Every coroutine that spent a whole drain budget without leaving the callback, by id.
+     *
+     * The same ownership set as {@see self::$preemptSuspended}, for the coroutines the drain has
+     * given up on. They are held here **forever**: the drain stopping is a decision about how long
+     * to keep resuming, never a decision to let go — letting go is the fatal error. What ends the
+     * process is {@see Preemptor} terminating it deliberately, not the engine reaching these.
+     *
+     * @var array<int, Coroutine>
+     */
+    private array $undrainable = [];
+
+    /**
+     * What each of those coroutines is, and how much of the budget it consumed, by id.
+     *
+     * Kept alongside rather than derived, because the counts accumulate across drain attempts: a
+     * run tears down through several of them, and the report should say what the coroutine cost in
+     * total rather than what the last attempt happened to spend on it.
+     *
+     * @var array<int, array{id: int, origin: string, resumes: int, seconds: float}>
+     */
+    private array $undrainableDiagnostics = [];
 
     private ?Preemptor $preemptor = null;
 
@@ -174,7 +225,8 @@ final class Scheduler implements SchedulerInterface
     }
 
     /**
-     * Resume every coroutine that is parked inside the preemption callback until none is left.
+     * Resume every coroutine parked inside the preemption callback until it leaves, or the budget
+     * runs out.
      *
      * A preempted fiber cannot be disposed of: its saved stack contains the FFI trampoline of the
      * interrupt callback, and the engine unwinds a dying fiber from wherever it is suspended, which
@@ -187,28 +239,90 @@ final class Scheduler implements SchedulerInterface
      * here may be in a loop that never yields, and it is the live slice timer that guarantees the
      * resume returns at all rather than running to the end of that loop.
      *
-     * A coroutine that neither terminates nor ever reaches a cooperative suspension point cannot be
-     * discarded — this drains it forever. That is not a defect of the drain: with preemption armed,
-     * such a coroutine's lifetime genuinely belongs to the scheduler, and the alternative to
-     * spinning here is a fatal error at shutdown.
+     * # The budget, and what happens when it runs out
      *
+     * A coroutine with no cooperative point at all — `while (true) { $x++; }` — never leaves the
+     * callback, so an unbounded drain is an unexplained hang at shutdown. Each attempt therefore
+     * spends at most $budgetSeconds of wall clock over the whole set and at most $maxResumes
+     * resumes on any one coroutine, and every coroutine is resumed at least once whatever the clock
+     * says.
+     *
+     * Nothing is released when the budget runs out. The coroutine moves to a set this scheduler
+     * holds for the rest of the process ({@see self::undrainableCoroutines()} reports it), and
+     * {@see Preemptor} turns that report into a diagnosis and a deliberate process exit — the one
+     * ending that keeps the engine from ever destroying the fiber. A later attempt with its own
+     * budget picks the coroutine up again: giving up is about this attempt, not about the coroutine.
+     *
+     * @param float|null $budgetSeconds Wall clock for this whole attempt; null takes
+     *                                  {@see self::DEFAULT_DRAIN_BUDGET_SECONDS}.
+     * @param int|null   $maxResumes    Resumes for any one coroutine; null takes
+     *                                  {@see self::DEFAULT_DRAIN_RESUMES}.
      * @return int How many coroutines were drained out of the callback.
      */
-    public function drainPreempted(): int
+    public function drainPreempted(?float $budgetSeconds = null, ?int $maxResumes = null): int
     {
-        $drained = 0;
+        // A resume only comes back because the next slice tick takes the CPU away again, not
+        // because the coroutine hands it over: with the timer down, one `step()` into a coroutine
+        // that never yields never returns, and the budget below is never even consulted. Nothing is
+        // lost by declining — anything still in the callback at this point has already been through
+        // a full budget with the timer live.
+        if ($this->preemptor?->isArmed() === false) {
+            return 0;
+        }
 
-        while ($this->preemptSuspended !== []) {
-            foreach ($this->preemptSuspended as $id => $coroutine) {
-                unset($this->preemptSuspended[$id]);
+        $budget   = ($budgetSeconds ?? self::DEFAULT_DRAIN_BUDGET_SECONDS) * self::NANOSECONDS_PER_SECOND;
+        $deadline = TimerQueue::now() + (int) $budget;
+        $ceiling  = $maxResumes ?? self::DEFAULT_DRAIN_RESUMES;
+        $drained  = 0;
 
-                if ($this->drainOne($coroutine)) {
-                    $drained++;
-                }
+        // Everything an earlier attempt gave up on is a candidate again: this call brings its own
+        // budget, and only a coroutine that refuses it again stays in the report.
+        $candidates = $this->preemptSuspended + $this->undrainable;
+        $spent      = $this->undrainableDiagnostics;
+
+        $this->preemptSuspended       = [];
+        $this->undrainable            = [];
+        $this->undrainableDiagnostics = [];
+
+        foreach ($candidates as $id => $coroutine) {
+            if (!$coroutine->isPreemptSuspended()) {
+                continue;
             }
+
+            [$left, $resumes, $seconds] = $this->resumeOutOfTheCallback($coroutine, $deadline, $ceiling);
+
+            if ($left) {
+                $drained++;
+
+                continue;
+            }
+
+            $this->undrainable[$id]            = $coroutine;
+            $this->undrainableDiagnostics[$id] = [
+                'id'      => $id,
+                'origin'  => $coroutine->spawnLocation(),
+                'resumes' => ($spent[$id]['resumes'] ?? 0)   + $resumes,
+                'seconds' => ($spent[$id]['seconds'] ?? 0.0) + $seconds,
+            ];
         }
 
         return $drained;
+    }
+
+    /**
+     * The coroutines the drain has given up on, and what each of them cost.
+     *
+     * Empty in every run where preemption is off, or where every preempted coroutine eventually
+     * returned or parked — which is every correct program. A non-empty answer is a diagnosis
+     * waiting to be raised, and the shape matches {@see self::blockedCoroutines()} on purpose:
+     * both are dumps keyed to a spawn site, because that is the line the reader has to go and look
+     * at.
+     *
+     * @return list<array{id: int, origin: string, resumes: int, seconds: float}>
+     */
+    public function undrainableCoroutines(): array
+    {
+        return array_values($this->undrainableDiagnostics);
     }
 
     /** The pending deadlines; the timer surface and `sleep()` arm their entries here. */
@@ -277,7 +391,8 @@ final class Scheduler implements SchedulerInterface
     public function discardPending(): void
     {
         // Everything below drops references, and a preempt-suspended coroutine is the one kind of
-        // debris that may not simply be dropped.
+        // debris that may not simply be dropped. Whatever the drain could not get out of the
+        // callback stays owned by $this->undrainable, so clearing $this->live below is still safe.
         $this->drainPreempted();
 
         while (!$this->runQueue->isEmpty()) {
@@ -435,22 +550,31 @@ final class Scheduler implements SchedulerInterface
             return;
         }
 
-        unset($this->preemptSuspended[$coroutine->id()]);
+        // Out of the callback under its own steam, which also clears any earlier verdict about it:
+        // a coroutine that has just parked or yielded is plainly not undrainable.
+        unset(
+            $this->preemptSuspended[$coroutine->id()],
+            $this->undrainable[$coroutine->id()],
+            $this->undrainableDiagnostics[$coroutine->id()],
+        );
     }
 
     /**
-     * Resume one coroutine until it is out of the preemption callback.
+     * Resume one coroutine until it is out of the preemption callback, or its budget is gone.
      *
      * "Out" means terminated, or suspended at a point the coroutine's own code chose — a channel
-     * park, a sleep, a yield. Both are safe to hold or to drop.
+     * park, a sleep, a yield. Both are safe to hold or to drop. The budget is checked *after* a
+     * resume, never before: a coroutine that has not been resumed at all has not refused anything.
      *
-     * @return bool Whether the coroutine was in the callback to begin with.
+     * @param int $deadline   `hrtime(true)` mark shared with the rest of this drain attempt.
+     * @param int $maxResumes Resumes this coroutine may have.
+     * @return array{0: bool, 1: int, 2: float} Whether it left the callback, resumes spent, seconds
+     *                                          spent.
      */
-    private function drainOne(Coroutine $coroutine): bool
+    private function resumeOutOfTheCallback(Coroutine $coroutine, int $deadline, int $maxResumes): array
     {
-        if (!$coroutine->isPreemptSuspended()) {
-            return false;
-        }
+        $started = TimerQueue::now();
+        $resumes = 0;
 
         while ($coroutine->isPreemptSuspended()) {
             $this->current = $coroutine;
@@ -466,16 +590,22 @@ final class Scheduler implements SchedulerInterface
                 $this->current = null;
             }
 
+            $resumes++;
+
             if ($command === null) {
                 unset($this->live[$coroutine->id()]);
 
                 break;
             }
+
+            if ($resumes >= $maxResumes || TimerQueue::now() >= $deadline) {
+                break;
+            }
         }
 
-        unset($this->preemptSuspended[$coroutine->id()]);
+        $elapsed = (TimerQueue::now() - $started) / self::NANOSECONDS_PER_SECOND;
 
-        return true;
+        return [!$coroutine->isPreemptSuspended(), $resumes, $elapsed];
     }
 
     /**

@@ -516,6 +516,11 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 - **Preemption is opt-in** (`new Runtime(preemptive: true)`) and, once armed, makes coroutine
   lifetimes the scheduler's business: a preempted coroutine is suspended inside an engine callback,
   so it is drained rather than discarded when a run ends.
+- **A coroutine with no cooperative point ends the process, with a diagnosis.** `while (true) { $x++; }`
+  never returns and never parks, so it can never be drained out of that callback and it can never be
+  released either. The drain gives it a budget, then `run()` throws `UndrainableCoroutineException`
+  naming the coroutine and the line that spawned it, and the runtime terminates the process itself
+  rather than leaving the fiber for the engine to destroy — which is an uncatchable fatal.
 - **An idle preemptive runtime is as quiet as a cooperative one.** The slice clock is stopped for
   exactly the time the process spends blocked in the poller — there is no coroutine to take the CPU
   away from — and started again on every way out of it, so a server waiting for work does not pay a
