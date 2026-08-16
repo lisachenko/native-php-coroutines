@@ -195,6 +195,20 @@ final class PanicWithMessageTask implements Task
     }
 }
 
+/**
+ * Panics with a DomainException, so a concurrent panic differs from {@see PanicWithMessageTask}'s
+ * by class and by the task frame in its trace — not only by message.
+ */
+final class PanicWithDomainErrorTask implements Task
+{
+    public function __construct(public readonly string $message) {}
+
+    public function run(TaskRuntime $runtime): mixed
+    {
+        throw new \DomainException($this->message);
+    }
+}
+
 /** Pushes a bounded number of values onto a named shared channel. */
 final class SharedSendTask implements Task
 {

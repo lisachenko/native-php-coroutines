@@ -13,7 +13,6 @@ declare(strict_types=1);
 namespace Lisachenko\NativePhpCoroutines\Parallel;
 
 use Lisachenko\NativePhpCoroutines\Exception\ParallelTaskException;
-use Lisachenko\NativePhpCoroutines\Exception\WorkerCrashedException;
 use Lisachenko\NativePhpCoroutines\Parallel\Protocol\TaggedRecord;
 use Lisachenko\NativePhpCoroutines\SchedulerInterface;
 use Lisachenko\SharedData\Ipc\SharedError;
@@ -219,6 +218,12 @@ final class SlotTable
      * code write a per-process `properties` pointer into the shared struct, and the next sibling to
      * read that object segfaults. A panic handler is exactly the code most likely to reach for a
      * dump, which is why it is spelled out here rather than assumed.
+     *
+     * A panic slot whose payload does not attach as a {@see SharedError} still surfaces as a
+     * `ParallelTaskException` — the panic itself is certain, only its detail is missing — and the
+     * exception says the detail is unavailable rather than presenting whatever object was found as
+     * this task's failure. The worker is not declared dead over it: it settled the slot, so it is
+     * demonstrably alive.
      */
     private function settle(ResultSlot $slot, SlotResult $result): void
     {
@@ -237,10 +242,12 @@ final class SlotTable
         $slot->complete = true;
         $slot->error    = $error instanceof SharedError
             ? new ParallelTaskException($error->className, $error->message, $error->trace, $slot->workerId)
-            : new WorkerCrashedException(
+            : new ParallelTaskException(
+                'Throwable',
+                'its error detail is unavailable — the slot payload did not attach as a shared '
+                . 'error-info object, and no other task\'s detail is presented in its place',
+                '',
                 $slot->workerId,
-                'the task panicked but its shared error-info object could not be attached',
-                [$slot->id],
             );
 
         $this->wake($slot);
