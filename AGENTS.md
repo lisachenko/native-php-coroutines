@@ -311,7 +311,7 @@ in every process.
 ### z-engine's line must match the running PHP minor
 
 z-engine reads engine structures by byte offset and those offsets change on every PHP minor, so the
-constraint is `8.4.x-dev || 8.5.x-dev` — Composer resolves the line matching the running PHP.
+constraint is `~8.4.2 || ~8.5.0` — Composer resolves the stable line matching the running PHP.
 `ZEngine\Core::init()` enforces the exact match and refuses to boot on a mismatch. **Never loosen the
 constraint, skip `Core::init()`, or defeat the guard to make a failure go away.** A refusal is the
 guard working.
