@@ -3,7 +3,6 @@ A worker killed while it holds an arena lock fails its waiter instead of hanging
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ A select takes the case that is already ready instead of parking
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

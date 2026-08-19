@@ -3,7 +3,6 @@ A coroutine that never parks and never returns ends the run with a diagnosis ins
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

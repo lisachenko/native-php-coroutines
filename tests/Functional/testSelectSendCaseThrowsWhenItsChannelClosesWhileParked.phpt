@@ -3,7 +3,6 @@ A parked select send case throws when its channel is closed underneath it
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

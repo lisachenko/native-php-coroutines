@@ -3,7 +3,6 @@ An uncaught throwable in any coroutine is a panic that terminates the run and le
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

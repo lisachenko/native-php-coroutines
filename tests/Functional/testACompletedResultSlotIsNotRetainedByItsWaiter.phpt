@@ -3,7 +3,6 @@ The local view of a result slot is dropped once the handle that could still read
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

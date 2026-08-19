@@ -3,7 +3,6 @@ A task dispatched to a worker runs there and its integer result comes back to th
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

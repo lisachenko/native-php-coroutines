@@ -3,7 +3,6 @@ A resolved select leaves no waiter behind on the cases that lost
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

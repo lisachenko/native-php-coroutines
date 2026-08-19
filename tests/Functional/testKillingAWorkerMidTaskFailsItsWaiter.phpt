@@ -3,7 +3,6 @@ SIGKILLing a worker in the middle of a task fails the parked waiter instead of h
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

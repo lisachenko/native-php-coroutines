@@ -3,7 +3,6 @@ Spawned coroutines run in the order they were spawned, after the coroutine that 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

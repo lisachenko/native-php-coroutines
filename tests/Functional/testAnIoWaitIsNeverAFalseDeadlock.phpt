@@ -3,7 +3,6 @@ A coroutine parked on stream readiness never triggers a deadlock, however long i
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

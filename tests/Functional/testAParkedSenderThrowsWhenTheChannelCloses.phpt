@@ -3,7 +3,6 @@ A sender that was already parked when the channel closed throws
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

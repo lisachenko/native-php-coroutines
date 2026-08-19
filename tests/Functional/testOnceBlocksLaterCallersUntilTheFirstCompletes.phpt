@@ -3,7 +3,6 @@ Once makes later callers wait for the initializer instead of letting them past i
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

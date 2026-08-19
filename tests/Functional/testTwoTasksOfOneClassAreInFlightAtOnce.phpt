@@ -3,7 +3,6 @@ Two tasks of one class are in flight at once, and each graph survives the other
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

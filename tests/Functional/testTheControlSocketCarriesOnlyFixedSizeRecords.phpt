@@ -3,7 +3,6 @@ A real worker answers over the raw socket in whole 16-byte records and nothing e
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

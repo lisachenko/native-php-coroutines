@@ -3,7 +3,6 @@ A rendezvous select abandoned by a cancelled context leaves no registration behi
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

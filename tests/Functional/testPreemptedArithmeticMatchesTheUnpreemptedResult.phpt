@@ -3,7 +3,6 @@ A computation cut into slices by preemption produces exactly the result it produ
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

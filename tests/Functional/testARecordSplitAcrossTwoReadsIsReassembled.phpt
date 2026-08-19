@@ -3,7 +3,6 @@ A control record delivered in two pieces is held back until all 16 bytes are the
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

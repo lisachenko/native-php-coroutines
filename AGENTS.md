@@ -329,9 +329,16 @@ as permission to run Layer 2 or parallel code against a mismatched tree.
 
 - `ffi.enable=1` — cannot be turned on at runtime.
 - `opcache.jit=off` — the JIT rewrites the very executor internals the engine hooks depend on.
-- `error_reporting=E_ALL & ~E_DEPRECATED` — the z-engine dev lines may report deprecations from
-  dependency code, and PHPUnit's `.phpt` runner forces `display_errors=1`, so an unsuppressed
-  deprecation is prepended to a test's captured output and fails an `--EXPECT--` block over noise.
+
+Those two, and nothing else. A third line, `error_reporting=E_ALL & ~E_DEPRECATED`, used to sit
+alongside them: PHPUnit's `.phpt` runner forces `display_errors=1`, so a deprecation raised by the
+**dependency** — z-engine, back when it was consumed from a development branch — was prepended to a
+test's captured output and failed an `--EXPECT--` block over noise. The stable releases now required
+(`~8.4.2 || ~8.5.0`) raise none, and the suppression was hiding **this package's own** deprecations
+too: that is how the `SplObjectStorage::contains()` call PHP 8.5 deprecated (#39) sat green through
+12 tests. The suite now runs at the runner's default `error_reporting`, so a deprecation from our
+code fails a test the day it appears. **Do not re-add a diagnostic filter to a `.phpt`** — the guard
+test rejects any `error_reporting` line in an `--INI--` section.
 
 ```bash
 php8.4 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
@@ -360,10 +367,11 @@ version and a minimal reproducer, and report it.
 
 The suite is PHPUnit 12 driving `.phpt` files in `tests/Functional/`, one behaviour per file.
 
-- **`--INI--` is mandatory and carries all three lines.** The child processes the runner spawns
-  inherit nothing by luck. `tests/Functional/testEveryTestDeclaresTheThreeRequiredIniLines.phpt`
-  scans the whole suite — itself included — and fails naming the file and the missing setting, so a
-  new test cannot quietly omit one.
+- **`--INI--` is mandatory and carries both lines** — `ffi.enable=1` and `opcache.jit=off`, and no
+  diagnostic filter beside them. The child processes the runner spawns inherit nothing by luck.
+  `tests/Functional/testEveryTestDeclaresTheTwoRequiredIniLines.phpt` scans the whole suite — itself
+  included — and fails naming the file and the missing setting, so a new test cannot quietly omit
+  one; it fails the same way on an `error_reporting` line that would silence a real bug.
 - **`test<WhatItDoes>.phpt`**, and the `--TEST--` line says the behaviour, not the class.
 - **Prefer `--EXPECT--`** (exact match). Tests about errors `echo` the caught message rather than
   `var_dump()`ing it, so no string lengths need maintaining.

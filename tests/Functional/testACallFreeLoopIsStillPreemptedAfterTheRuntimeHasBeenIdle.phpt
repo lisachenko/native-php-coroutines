@@ -3,7 +3,6 @@ A call-free loop that starts after an idle stretch is preempted exactly as one t
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

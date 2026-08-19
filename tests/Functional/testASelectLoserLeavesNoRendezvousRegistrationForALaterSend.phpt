@@ -3,7 +3,6 @@ A capacity-0 shared channel that lost a select is no longer a rendezvous partner
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

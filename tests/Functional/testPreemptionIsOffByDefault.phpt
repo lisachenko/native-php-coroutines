@@ -3,7 +3,6 @@ A default runtime is fully cooperative: no preemptor, no timer, and a call-free 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

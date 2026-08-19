@@ -3,7 +3,6 @@ A context takes part in a select through its done channel
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

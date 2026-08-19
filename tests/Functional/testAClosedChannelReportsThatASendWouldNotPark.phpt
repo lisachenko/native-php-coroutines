@@ -3,7 +3,6 @@ A closed channel reports that both a send and a receive would complete without p
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ A pool spawning far more tasks than the slot supply runs to completion, reusing 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ When main returns, coroutines that are still pending are discarded rather than a
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

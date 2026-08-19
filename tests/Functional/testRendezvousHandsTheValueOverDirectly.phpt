@@ -3,7 +3,6 @@ A rendezvous hands the value straight to a waiting receiver, without the sender 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

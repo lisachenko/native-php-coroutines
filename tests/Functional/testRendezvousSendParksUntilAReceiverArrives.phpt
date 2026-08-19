@@ -3,7 +3,6 @@ A send on a rendezvous channel parks until a receiver arrives
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

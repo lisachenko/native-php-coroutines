@@ -3,7 +3,6 @@ A coroutine waiting on a JoinHandle or a shared channel is not reported as a dea
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

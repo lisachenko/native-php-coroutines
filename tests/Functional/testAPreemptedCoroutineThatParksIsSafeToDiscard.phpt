@@ -3,7 +3,6 @@ A preempted coroutine that goes on to park on a channel is drained out of the ca
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

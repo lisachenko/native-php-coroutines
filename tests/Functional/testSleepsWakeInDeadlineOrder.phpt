@@ -3,7 +3,6 @@ Sleeping coroutines wake in deadline order, not in the order they went to sleep
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ A Mutex serializes critical sections and hands the lock over in arrival order
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

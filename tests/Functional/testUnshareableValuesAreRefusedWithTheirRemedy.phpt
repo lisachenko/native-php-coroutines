@@ -3,7 +3,6 @@ Every value that cannot cross a worker boundary is refused with the remedy named
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

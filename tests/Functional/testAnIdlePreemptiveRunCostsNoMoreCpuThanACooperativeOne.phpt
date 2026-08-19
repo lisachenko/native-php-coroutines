@@ -3,7 +3,6 @@ Idling with preemption armed costs about as much CPU as idling cooperatively
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

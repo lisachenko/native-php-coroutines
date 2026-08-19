@@ -3,7 +3,6 @@ A worker killed inside an arena critical section is reported as a recovered lock
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

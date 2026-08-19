@@ -3,7 +3,6 @@ Locking a Mutex the calling coroutine already holds is reported as a deadlock
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

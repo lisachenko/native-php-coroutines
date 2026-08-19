@@ -3,7 +3,6 @@ A closure registered before the fork barrier is callable in a worker, and a late
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ Awaiting a slot that is already settled returns without parking the coroutine
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

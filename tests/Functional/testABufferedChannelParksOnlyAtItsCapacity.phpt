@@ -3,7 +3,6 @@ A buffered send parks only when the buffer is full, and a receive only when it i
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

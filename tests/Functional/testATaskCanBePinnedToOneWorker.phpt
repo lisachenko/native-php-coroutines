@@ -3,7 +3,6 @@ A task pinned to a worker always runs there, and pinning to a worker that is not
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

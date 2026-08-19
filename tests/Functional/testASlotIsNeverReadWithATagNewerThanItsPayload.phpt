@@ -3,7 +3,6 @@ A result slot read under contention never shows a tag from one generation and a 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

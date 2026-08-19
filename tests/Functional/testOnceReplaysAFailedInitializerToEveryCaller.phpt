@@ -3,7 +3,6 @@ A Once whose initializer threw stays spent and re-throws that failure to everyon
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

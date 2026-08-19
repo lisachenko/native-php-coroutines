@@ -3,7 +3,6 @@ A panic slot whose detail does not attach as a SharedError says so, instead of p
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

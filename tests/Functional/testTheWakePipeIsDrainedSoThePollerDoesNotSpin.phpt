@@ -3,7 +3,6 @@ A bounded number of cross-process sends costs a bounded number of poller wakeups
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

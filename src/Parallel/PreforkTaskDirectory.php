@@ -76,7 +76,7 @@ final class PreforkTaskDirectory implements TaskDirectory
      */
     public function register(Task $task): int
     {
-        if ($this->addresses->contains($task)) {
+        if ($this->addresses->offsetExists($task)) {
             return $this->addresses[$task];
         }
 
@@ -91,7 +91,7 @@ final class PreforkTaskDirectory implements TaskDirectory
 
     public function addressOf(Task $task): int
     {
-        if (!$this->addresses->contains($task)) {
+        if (!$this->addresses->offsetExists($task)) {
             throw new \LogicException(sprintf(
                 '%s was never published to the workers; without the shared arena (see #7) a task '
                 . 'can only reach a worker by being registered before the fork',

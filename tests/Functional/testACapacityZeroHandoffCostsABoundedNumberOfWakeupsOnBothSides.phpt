@@ -3,7 +3,6 @@ A run of cross-process rendezvous handoffs costs a bounded number of wakeups in 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 
