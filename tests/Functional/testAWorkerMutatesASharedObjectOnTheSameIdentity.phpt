@@ -3,7 +3,6 @@ A worker mutates a shared object and the parent observes it on the very same ins
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ A program that is only sleeping idles on its timer deadline instead of spinning
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

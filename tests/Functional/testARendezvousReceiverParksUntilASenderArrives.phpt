@@ -3,7 +3,6 @@ A receive on a capacity-0 shared channel parks on the poller until another proce
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

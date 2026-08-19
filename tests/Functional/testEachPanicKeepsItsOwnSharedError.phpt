@@ -3,7 +3,6 @@ Two panicking workers each keep their own error: class, message and trace all be
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

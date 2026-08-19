@@ -3,7 +3,6 @@ A task panic reaches the waiter as a ParallelTaskException carrying class, messa
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

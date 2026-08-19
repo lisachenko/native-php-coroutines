@@ -3,7 +3,6 @@ Declaring a shared root or a shared closure after the pool has forked is an erro
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

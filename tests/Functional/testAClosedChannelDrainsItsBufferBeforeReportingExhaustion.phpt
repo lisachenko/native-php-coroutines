@@ -3,7 +3,6 @@ A closed channel keeps delivering buffered values with ok = true, and only then 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

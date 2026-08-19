@@ -3,7 +3,6 @@ A signal arriving during stream_select is retried, with the remaining timeout ra
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

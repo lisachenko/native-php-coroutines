@@ -3,7 +3,6 @@ A readiness watch owns no coroutine: it fires a callback that wakes somebody els
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

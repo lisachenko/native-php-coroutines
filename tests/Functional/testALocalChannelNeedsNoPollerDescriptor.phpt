@@ -3,7 +3,6 @@ A local channel exposes no readiness descriptor, because nothing outside the pro
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

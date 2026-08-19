@@ -3,7 +3,6 @@ A deadlock names every locally blocked coroutine, its wait and its spawn site, a
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

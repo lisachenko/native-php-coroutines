@@ -3,7 +3,6 @@ Coroutines parked on different descriptors wake independently, in readiness orde
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

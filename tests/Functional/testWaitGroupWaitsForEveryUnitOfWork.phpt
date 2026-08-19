@@ -3,7 +3,6 @@ A WaitGroup releases its waiters only when the counter reaches zero
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

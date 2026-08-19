@@ -26,9 +26,9 @@ namespace Lisachenko\NativePhpCoroutines\Tests\Support;
 /**
  * Run $script in its own PHP process and wait for it, but never longer than $timeout.
  *
- * The child gets the same three INI settings every `.phpt` in this suite declares: they are not
- * inherited from the parent's command line, and a deprecation from a dependency would otherwise
- * land in the output the test is asserting on.
+ * The child gets the same two INI settings every `.phpt` in this suite declares: they are not
+ * inherited from the parent's command line. Nothing filters diagnostics here either — a deprecation
+ * raised inside the child is something a test should show, not swallow (see #39).
  *
  * @param  string $script  Absolute path of the PHP file to run.
  * @param  float  $timeout Seconds to wait before killing it.
@@ -44,7 +44,6 @@ function superviseChildProcess(string $script, float $timeout): array
         PHP_BINARY,
         '-d', 'ffi.enable=1',
         '-d', 'opcache.jit=off',
-        '-d', 'error_reporting=E_ALL & ~E_DEPRECATED',
         $script,
     ];
 

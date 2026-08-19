@@ -3,7 +3,6 @@ An idle preemptive runtime blocks in one poll instead of waking once per slice
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

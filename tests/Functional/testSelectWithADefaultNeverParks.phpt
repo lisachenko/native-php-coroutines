@@ -3,7 +3,6 @@ A select with a default takes the default instead of parking when nothing is rea
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

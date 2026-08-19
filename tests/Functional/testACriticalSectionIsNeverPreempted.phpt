@@ -3,7 +3,6 @@ A coroutine inside a critical section keeps the CPU, and the deferred preemption
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

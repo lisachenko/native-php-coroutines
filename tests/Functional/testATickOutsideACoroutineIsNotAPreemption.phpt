@@ -3,7 +3,6 @@ Slice ticks that land outside any coroutine are harmless and preempt nothing
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

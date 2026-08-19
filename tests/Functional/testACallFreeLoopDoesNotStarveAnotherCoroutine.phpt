@@ -3,7 +3,6 @@ A call-free arithmetic loop does not starve another coroutine when the runtime i
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

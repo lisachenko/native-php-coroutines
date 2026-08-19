@@ -3,7 +3,6 @@ Once runs its initializer exactly once and hands the same result to every caller
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

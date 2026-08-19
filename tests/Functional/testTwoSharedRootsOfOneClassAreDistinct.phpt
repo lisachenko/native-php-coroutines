@@ -3,7 +3,6 @@ Two shared roots of one class are two graphs, each mutated on its own identity
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

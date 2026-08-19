@@ -3,7 +3,6 @@ A runtime without workers maps no arena and refuses the shared surface with the 
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

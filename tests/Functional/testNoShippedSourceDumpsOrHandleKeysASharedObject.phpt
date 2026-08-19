@@ -3,7 +3,6 @@ Nothing in the shipped source dumps a shared object or keys one by its object-st
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

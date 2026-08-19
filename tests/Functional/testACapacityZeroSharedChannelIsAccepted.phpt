@@ -3,7 +3,6 @@ A shared channel can be declared with capacity 0, and reports itself as a rendez
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

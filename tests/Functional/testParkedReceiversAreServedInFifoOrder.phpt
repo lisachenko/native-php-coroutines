@@ -3,7 +3,6 @@ Parked receivers are served in the order they arrived
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

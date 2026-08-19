@@ -3,7 +3,6 @@ Io::awaitReadable parks the coroutine and wakes it exactly when data arrives
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

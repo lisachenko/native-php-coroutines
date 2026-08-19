@@ -3,7 +3,6 @@ A control record is exactly 16 bytes and carries opcode, tag, id and address
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

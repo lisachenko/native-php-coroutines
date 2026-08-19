@@ -3,7 +3,6 @@ A select with nothing ready parks on every case, and any one of them can wake it
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

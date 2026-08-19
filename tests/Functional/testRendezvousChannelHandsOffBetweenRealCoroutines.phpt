@@ -3,7 +3,6 @@ A rendezvous channel hands values between coroutines driven by the real schedule
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

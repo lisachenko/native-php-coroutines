@@ -3,7 +3,6 @@ A call-free loop inside a task does not starve another coroutine in that same wo
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

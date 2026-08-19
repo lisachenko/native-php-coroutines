@@ -3,7 +3,6 @@ A preempted coroutine refuses to be thrown into, while a coroutine that suspende
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ No shipped source file calls serialize, igbinary, json_encode or var_export on a
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

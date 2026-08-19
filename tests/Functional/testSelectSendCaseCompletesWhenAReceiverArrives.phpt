@@ -3,7 +3,6 @@ A parked select send case completes when a receiver takes its value
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

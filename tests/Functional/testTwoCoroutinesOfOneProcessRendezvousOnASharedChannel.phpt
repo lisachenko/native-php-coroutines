@@ -3,7 +3,6 @@ A capacity-0 shared channel hands values between two coroutines of the same proc
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

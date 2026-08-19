@@ -3,7 +3,6 @@ Io::awaitWritable parks on a full socket buffer and wakes when the far end drain
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

@@ -3,7 +3,6 @@ The process holding an undrainable coroutine is ended deliberately, never by the
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

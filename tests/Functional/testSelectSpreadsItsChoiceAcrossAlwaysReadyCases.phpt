@@ -3,7 +3,6 @@ A select in a loop spreads its choice across cases that are always ready
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

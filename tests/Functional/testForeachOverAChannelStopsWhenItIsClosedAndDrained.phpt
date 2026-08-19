@@ -3,7 +3,6 @@ foreach over a channel yields until it is closed and drained
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

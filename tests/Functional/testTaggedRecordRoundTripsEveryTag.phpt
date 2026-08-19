@@ -3,7 +3,6 @@ Every tag round-trips through the 16-byte record encoding
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

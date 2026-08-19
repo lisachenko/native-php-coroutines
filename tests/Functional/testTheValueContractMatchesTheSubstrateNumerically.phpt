@@ -3,7 +3,6 @@ The tag table and the layout version are checked against the substrate by number
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

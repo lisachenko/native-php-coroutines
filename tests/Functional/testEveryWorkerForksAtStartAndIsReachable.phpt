@@ -3,7 +3,6 @@ Every worker is forked eagerly by start() and every one of them can be reached w
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

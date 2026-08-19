@@ -3,7 +3,6 @@ A handle on a recycled slot id is refused rather than answered with the result o
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

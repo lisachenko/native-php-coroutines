@@ -3,7 +3,6 @@ A context with a timeout cancels itself once its sleeper returns
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

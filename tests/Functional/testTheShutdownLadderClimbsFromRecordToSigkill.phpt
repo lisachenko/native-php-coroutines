@@ -3,7 +3,6 @@ Shutdown asks first, escalates to SIGTERM, and reaches SIGKILL for a worker that
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 

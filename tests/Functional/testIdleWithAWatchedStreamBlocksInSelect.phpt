@@ -3,7 +3,6 @@ With a descriptor registered, the idle turn blocks in stream_select for the time
 --INI--
 ffi.enable=1
 opcache.jit=off
-error_reporting=E_ALL & ~E_DEPRECATED
 --FILE--
 <?php
 
