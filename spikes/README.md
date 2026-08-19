@@ -51,9 +51,7 @@ for v in 8.4:ze84 8.5:ze85; do
   php="php${v%%:*}"; dir="${v##*:}"
   mkdir -p "$dir" && (cd "$dir" \
     && "$php" $(command -v composer) init -n --name=spikes/preemption \
-    && "$php" $(command -v composer) config minimum-stability dev \
-    && "$php" $(command -v composer) config prefer-stable true \
-    && "$php" $(command -v composer) require lisachenko/z-engine:"8.4.x-dev || 8.5.x-dev" -n)
+    && "$php" $(command -v composer) require lisachenko/z-engine:"~8.4.2 || ~8.5.0" -n)
 done
 ```
 

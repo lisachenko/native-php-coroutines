@@ -14,7 +14,7 @@
         "php": "^8.4",
         "ext-ffi": "*",
         "lisachenko/php-shared-data-extension": "dev-main",
-        "lisachenko/z-engine": "8.4.x-dev || 8.5.x-dev"
+        "lisachenko/z-engine": "~8.4.2 || ~8.5.0"
     },
     "minimum-stability": "dev",
     "prefer-stable": true,

@@ -24,10 +24,11 @@ fork-shared `mmap` arena and travel as addresses.
 composer require lisachenko/native-php-coroutines
 ```
 
-z-engine is required as `8.4.x-dev || 8.5.x-dev` — one development line per supported PHP minor,
-resolved by Composer to match the running PHP — so a consuming project needs
-`"minimum-stability": "dev"` with `"prefer-stable": true` at its root, as Composer only resolves
-development stability there.
+z-engine is required as `~8.4.2 || ~8.5.0` — one stable release line per supported PHP minor,
+resolved by Composer to match the running PHP. `lisachenko/php-shared-data-extension` is still
+consumed from `dev-main` (it has no tags yet), so this package keeps `"minimum-stability": "dev"`
+with `"prefer-stable": true` at its root, and a consuming project needs the same pair until that
+dependency is tagged — Composer only resolves development stability at the root level.
 
 ## Quick start
 
@@ -528,8 +529,9 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 - PHP **8.4** or **8.5**, NTS.
 - `ext-ffi` with `ffi.enable=1`, and `opcache.jit=off` — the JIT rewrites the executor internals the
   engine hooks depend on.
-- `lisachenko/z-engine`, resolved per PHP minor (`8.4.x-dev` on 8.4, `8.5.x-dev` on 8.5) — engine
-  structures are read by byte offset, so the line must match the running minor. `ZEngine\Core::init()`
+- `lisachenko/z-engine`, resolved per PHP minor (`8.4.x` on 8.4, `8.5.x` on 8.5, from the
+  `~8.4.2 || ~8.5.0` constraint) — engine structures are read by byte offset, so the line must
+  match the running minor. `ZEngine\Core::init()`
   enforces it and refuses to boot on a mismatch.
 - `ext-pcntl` and `ext-posix` for the parallel and preemption layers (suggested, not required).
   Preemption needs `ext-pcntl` specifically: the slice timer is delivered as `SIGALRM`.
