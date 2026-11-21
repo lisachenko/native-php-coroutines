@@ -24,8 +24,8 @@ fork-shared `mmap` arena and travel as addresses.
 composer require lisachenko/native-php-coroutines
 ```
 
-z-engine is required as `~8.4.2 || ~8.5.0` — one stable release line per supported PHP minor,
-resolved by Composer to match the running PHP. `lisachenko/php-shared-data-extension` is still
+z-engine is required as `~8.4.2 || ~8.5.0 || ~8.6.0` — one stable release line per supported PHP
+minor, resolved by Composer to match the running PHP. `lisachenko/php-shared-data-extension` is still
 consumed from `dev-main` (it has no tags yet), so this package keeps `"minimum-stability": "dev"`
 with `"prefer-stable": true` at its root, and a consuming project needs the same pair until that
 dependency is tagged — Composer only resolves development stability at the root level.
@@ -526,11 +526,11 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 
 ## Requirements
 
-- PHP **8.4** or **8.5**, NTS.
+- PHP **8.4**, **8.5** or **8.6**, NTS.
 - `ext-ffi` with `ffi.enable=1`, and `opcache.jit=off` — the JIT rewrites the executor internals the
   engine hooks depend on.
-- `lisachenko/z-engine`, resolved per PHP minor (`8.4.x` on 8.4, `8.5.x` on 8.5, from the
-  `~8.4.2 || ~8.5.0` constraint) — engine structures are read by byte offset, so the line must
+- `lisachenko/z-engine`, resolved per PHP minor (`8.4.x` on 8.4, `8.5.x` on 8.5, `8.6.x` on 8.6,
+  from the `~8.4.2 || ~8.5.0 || ~8.6.0` constraint) — engine structures are read by byte offset, so the line must
   match the running minor. `ZEngine\Core::init()`
   enforces it and refuses to boot on a mismatch.
 - `ext-pcntl` and `ext-posix` for the parallel and preemption layers (suggested, not required).
@@ -596,14 +596,15 @@ z-engine requires it, and z-engine is a hard dependency of this package.
 ## Development
 
 ```bash
-php8.4 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit   # the suite, on both minors
+php8.4 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit   # the suite, on every minor
 php8.5 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
+php8.6 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
 composer phpstan                                               # level max
 composer cs:fix                                                # PER-CS2.0, a local step
 ```
 
 Coding standards are deliberately **not** a CI job — CI runs `tests`, `static-analysis` and a
-bounded `preemption-soak` across PHP 8.4 and 8.5. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
+bounded `preemption-soak` across PHP 8.4, 8.5 and 8.6, every leg required. A segfault is an engine-level bug, never a flaky test: capture the command, the PHP
 version and a minimal reproducer instead of retrying.
 
 Contributor rules — the engine contracts, the shared-memory disciplines, the preemption obligations

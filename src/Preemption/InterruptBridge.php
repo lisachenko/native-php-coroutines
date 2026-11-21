@@ -131,31 +131,39 @@ final class InterruptBridge
     /**
      * The engine callback. Runs inside the interrupted frame, in the interrupted coroutine's fiber.
      *
-     * Read the two `try` blocks as one rule each: the first must never let a throwable out, and the
-     * second must never let a chained handler be skipped — including when the first one suspended
-     * and the coroutine was resumed seconds later, which is exactly where control returns to.
+     * Read the two `try` blocks as one rule each: the first must never let a chained handler be
+     * skipped, and the second must never let a throwable out.
+     *
+     * The chained handler runs **first**. ext-pcntl's is where the slice timer's SIGALRM is
+     * dispatched to {@see Preemptor}, so chaining first means the tick that brought control here is
+     * already recorded when the policy is asked, and the suspend happens after pcntl's dispatch has
+     * returned — that dispatch blocks every fiber switch for as long as it runs. Current PHP builds
+     * (8.4.28+, 8.5.13+, 8.6) also check for an interrupt when an internal call returns, so this
+     * callback is re-entered from *inside* the PHP signal handler as well; the policy declines there
+     * without consuming the request, and this outer invocation takes it once `proceed()` returns.
      */
     private function onInterrupt(InterruptHook $hook): void
     {
+        try {
+            if ($hook->hasOriginalHandler()) {
+                $hook->proceed();
+            }
+        } catch (\Throwable) {
+        }
+
         try {
             if (\Fiber::getCurrent() !== null && ($this->shouldPreempt)()) {
                 $this->preemptions++;
 
                 // Control leaves the process's PHP stack here and comes back in
                 // Scheduler::runNext(), which sees SuspendCommand::PREEMPT and re-queues the
-                // coroutine. Execution resumes on the next line when it gets the CPU again.
+                // coroutine. Execution resumes on the next line when it gets the CPU again, with
+                // nothing left to do: the chained handler has already run.
                 \Fiber::suspend(SuspendCommand::PREEMPT);
             }
         } catch (\Throwable) {
             // Deliberately swallowed and deliberately not logged: logging is user code, user code
             // can throw, and a throw from here is an uncatchable fatal.
-        }
-
-        try {
-            if ($hook->hasOriginalHandler()) {
-                $hook->proceed();
-            }
-        } catch (\Throwable) {
         }
     }
 
