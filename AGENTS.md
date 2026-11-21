@@ -125,7 +125,14 @@ The mechanism was selected by experiment, and the negative result is the load-be
   happens inside the z-engine `InterruptHook` callback.
 - **The whole callback body must be `try`/`catch`-wrapped.** A throwable escaping an FFI callback is
   an uncatchable "Throwing from FFI callbacks is not allowed" fatal — no `catch` upstream ever runs.
-- **Always chain `proceed()`** so a previously installed handler still runs.
+- **Always chain `proceed()`, and chain it *before* deciding to suspend.** A previously installed
+  handler must still run — ext-pcntl's is where SIGALRM reaches the PHP-level tick handler. Chaining
+  first is also what makes preemption work at all on current PHP builds (8.4.28+, 8.5.13+, 8.6):
+  they check for an interrupt when an internal call returns, so the flag the tick handler raises is
+  taken *inside* that handler, under pcntl's fiber-switch block. `Preemptor::shouldPreempt()`
+  declines there (`dispatchingTick`) without consuming the request, and the outer callback takes
+  it once `proceed()` has returned. Suspending first and chaining second lost every request this
+  way: `Fiber::suspend()` threw a swallowed `FiberError` and no coroutine was ever preempted.
 - **No autoloading inside the callback.** Preload every class the callback touches; triggering the
   autoloader from an engine hook re-enters the compiler.
 - **Only ever `resume(null)` a preempt-suspended fiber. Never `Fiber::throw()` into one** — the spike
@@ -311,7 +318,9 @@ in every process.
 ### z-engine's line must match the running PHP minor
 
 z-engine reads engine structures by byte offset and those offsets change on every PHP minor, so the
-constraint is `~8.4.2 || ~8.5.0` — Composer resolves the stable line matching the running PHP.
+constraint is `~8.4.2 || ~8.5.0 || ~8.6.0@dev` — Composer resolves the line matching the running PHP:
+the stable tags on 8.4 and 8.5, and z-engine's `8.6.x-dev` (`master`) on 8.6 until z-engine tags
+8.6.0, at which point `"prefer-stable"` moves it onto the tag and the `@dev` flag can go.
 `ZEngine\Core::init()` enforces the exact match and refuses to boot on a mismatch. **Never loosen the
 constraint, skip `Core::init()`, or defeat the guard to make a failure go away.** A refusal is the
 guard working.
@@ -334,7 +343,7 @@ Those two, and nothing else. A third line, `error_reporting=E_ALL & ~E_DEPRECATE
 alongside them: PHPUnit's `.phpt` runner forces `display_errors=1`, so a deprecation raised by the
 **dependency** — z-engine, back when it was consumed from a development branch — was prepended to a
 test's captured output and failed an `--EXPECT--` block over noise. The stable releases now required
-(`~8.4.2 || ~8.5.0`) raise none, and the suppression was hiding **this package's own** deprecations
+(`~8.4.2 || ~8.5.0`, and the 8.6 line) raise none, and the suppression was hiding **this package's own** deprecations
 too: that is how the `SplObjectStorage::contains()` call PHP 8.5 deprecated (#39) sat green through
 12 tests. The suite now runs at the runner's default `error_reporting`, so a deprecation from our
 code fails a test the day it appears. **Do not re-add a diagnostic filter to a `.phpt`** — the guard
@@ -343,6 +352,7 @@ test rejects any `error_reporting` line in an `--INI--` section.
 ```bash
 php8.4 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
 php8.5 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
+php8.6 -d ffi.enable=1 -d opcache.jit=off vendor/bin/phpunit
 ```
 
 ### Coding standards are a local step, not a CI job
@@ -353,7 +363,7 @@ composer cs:check    # the same, without writing
 composer phpstan     # level max, must be clean
 ```
 
-CI runs **`tests`, `static-analysis` and the bounded `preemption-soak`**, all across PHP 8.4 and 8.5.
+CI runs **`tests`, `static-analysis` and the bounded `preemption-soak`**, all across PHP 8.4, 8.5 and 8.6 — every leg required, 8.6 included.
 The coding-standards job was deliberately removed: php-cs-fixer is a development tool here, and
 re-checking on a runner only turns a fixable formatting nit into a red build. **Do not re-add it.**
 

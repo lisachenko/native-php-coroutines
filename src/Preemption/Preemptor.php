@@ -27,11 +27,17 @@ use Lisachenko\NativePhpCoroutines\Scheduler;
  * # The path a preemption takes
  *
  * 1. `setitimer(ITIMER_REAL)` raises `SIGALRM` every slice.
- * 2. ext-pcntl's C handler raises `EG(vm_interrupt)`; {@see self::onTick()} — the PHP-level handler
- *    — records that a preemption is *wanted* and raises the flag again, so the callback is reached
- *    outside pcntl's own dispatch frame.
- * 3. The engine calls the interrupt callback at the next check (a loop back-edge or a function
- *    entry), the callback asks {@see self::shouldPreempt()}, and suspends if the answer is yes.
+ * 2. ext-pcntl's C handler raises `EG(vm_interrupt)`. The engine calls the interrupt callback at
+ *    the next check (a loop back-edge, a function entry, or the return of an internal call), and
+ *    the callback first chains to ext-pcntl, whose dispatch runs {@see self::onTick()} — the
+ *    PHP-level handler — which records that a preemption is *wanted*.
+ * 3. Back in the callback, now outside pcntl's dispatch frame, it asks {@see self::shouldPreempt()}
+ *    and suspends if the answer is yes.
+ *
+ * Current PHP builds (8.4.28+, 8.5.13+, 8.6) also check for an interrupt when an internal call
+ * returns, so the flag {@see self::onTick()} raises is taken *inside* the handler, where the engine
+ * blocks every fiber switch. {@see self::$dispatchingTick} makes that nested callback decline
+ * without consuming the request, and the outer callback takes it once the dispatch has returned.
  *
  * # What makes the answer "no"
  *
@@ -110,6 +116,15 @@ final class Preemptor
     private bool $requested = false;
 
     private int $criticalDepth = 0;
+
+    /**
+     * {@see self::onTick()} is running, i.e. control is inside ext-pcntl's signal dispatch.
+     *
+     * The engine refuses every fiber switch there, so an interrupt callback reached from inside the
+     * handler must leave the request pending instead of consuming it on a suspend that can only
+     * fail with `FiberError`.
+     */
+    private bool $dispatchingTick = false;
 
     /**
      * The clock is stopped because the process is blocked in the poller with nothing running.
@@ -380,7 +395,7 @@ final class Preemptor
      */
     public function shouldPreempt(): bool
     {
-        if (!$this->armed || !$this->requested || $this->criticalDepth > 0) {
+        if (!$this->armed || !$this->requested || $this->criticalDepth > 0 || $this->dispatchingTick) {
             return false;
         }
 
@@ -402,18 +417,27 @@ final class Preemptor
      * The PHP-level SIGALRM handler.
      *
      * It may not suspend anything — the engine refuses fiber switches from signal dispatch, always
-     * and on every dispatch path — so it records the request and raises the VM interrupt flag,
-     * which gets the interrupt callback invoked outside pcntl's dispatch frame.
+     * and on every dispatch path — so it records the request and raises the VM interrupt flag. On
+     * the async path the interrupt callback that is dispatching this handler takes the request as
+     * soon as the dispatch returns; on current PHP builds the raised flag is also seen by a nested
+     * callback while this method still runs, and {@see self::$dispatchingTick} makes that one
+     * decline.
      *
      * @param int   $signal  The delivered signal, always SIGALRM here.
      * @param mixed $details ext-pcntl's siginfo payload; unused.
      */
     private function onTick(int $signal, mixed $details = null): void
     {
-        $this->requested = true;
+        $this->dispatchingTick = true;
 
-        if ($this->criticalDepth === 0) {
-            $this->bridge->requestInterrupt();
+        try {
+            $this->requested = true;
+
+            if ($this->criticalDepth === 0) {
+                $this->bridge->requestInterrupt();
+            }
+        } finally {
+            $this->dispatchingTick = false;
         }
     }
 

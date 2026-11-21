@@ -265,7 +265,7 @@ final class ItimerClock
         }
 
         throw new \RuntimeException(
-            'could not bind setitimer(2) through FFI: ' . ($failure?->getMessage() ?? 'unknown reason'),
+            'could not bind setitimer(2) through FFI: ' . $failure->getMessage(),
             0,
             $failure,
         );
