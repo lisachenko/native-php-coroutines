@@ -318,9 +318,7 @@ in every process.
 ### z-engine's line must match the running PHP minor
 
 z-engine reads engine structures by byte offset and those offsets change on every PHP minor, so the
-constraint is `~8.4.2 || ~8.5.0 || ~8.6.0@dev` — Composer resolves the line matching the running PHP:
-the stable tags on 8.4 and 8.5, and z-engine's `8.6.x-dev` (`master`) on 8.6 until z-engine tags
-8.6.0, at which point `"prefer-stable"` moves it onto the tag and the `@dev` flag can go.
+constraint is `~8.4.2 || ~8.5.0 || ~8.6.0` — Composer resolves the stable line matching the running PHP.
 `ZEngine\Core::init()` enforces the exact match and refuses to boot on a mismatch. **Never loosen the
 constraint, skip `Core::init()`, or defeat the guard to make a failure go away.** A refusal is the
 guard working.
@@ -343,7 +341,7 @@ Those two, and nothing else. A third line, `error_reporting=E_ALL & ~E_DEPRECATE
 alongside them: PHPUnit's `.phpt` runner forces `display_errors=1`, so a deprecation raised by the
 **dependency** — z-engine, back when it was consumed from a development branch — was prepended to a
 test's captured output and failed an `--EXPECT--` block over noise. The stable releases now required
-(`~8.4.2 || ~8.5.0`, and the 8.6 line) raise none, and the suppression was hiding **this package's own** deprecations
+(`~8.4.2 || ~8.5.0 || ~8.6.0`) raise none, and the suppression was hiding **this package's own** deprecations
 too: that is how the `SplObjectStorage::contains()` call PHP 8.5 deprecated (#39) sat green through
 12 tests. The suite now runs at the runner's default `error_reporting`, so a deprecation from our
 code fails a test the day it appears. **Do not re-add a diagnostic filter to a `.phpt`** — the guard
